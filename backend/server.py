@@ -12,6 +12,7 @@ from typing import List
 import uuid
 from routers.ai import router as ai_router
 from routers.documents import router as documents_router
+from routers.auth import router as auth_router
 
 
 ROOT_DIR = Path(__file__).parent
@@ -48,6 +49,7 @@ class StatusCheckCreate(BaseModel):
 
 api_router.include_router(ai_router)
 api_router.include_router(documents_router)
+api_router.include_router(auth_router)
 
 # Add your routes to the router instead of directly to app
 @api_router.get("/")

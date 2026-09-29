@@ -11,10 +11,10 @@ history, streaks, CSV, and range aggregation; `shared/prompts.js` owns the
 English/Spanish static prompt library. The local Pro toggle is a demo setting,
 not server-authenticated billing.
 
-There is currently no account/auth system, Supabase/Postgres, Stripe, remote
-document storage, or AI provider in the upstream project. The existing popup,
-word counter, sessions, progress, and basic prompts are intentionally not
-changed in Phase 1.
+The synchronized upstream baseline had no account/auth system, Supabase,
+Stripe, remote document storage, or AI provider. This workspace now adds the
+Supabase backend alongside that preserved extension; word counting, sessions,
+progress, and basic prompts remain unchanged.
 
 ## Phase 1 backend foundation
 
@@ -35,10 +35,11 @@ Embedding columns use `vector(1536)` with partial HNSW cosine indexes.
 
 ## Authentication and provider behavior
 
-The upstream app has no auth to reuse. `AI_AUTH_MODE=supabase` is configured,
-but AI routes fail closed until Supabase project values exist. FastAPI's auth
-boundary is prepared to verify Supabase JWTs with the project's JWKS endpoint.
-Paid access will come from `ai_entitlements`, never the extension's demo plan.
+`AI_AUTH_MODE=supabase` is live. `/api/auth/signup`, `/login`, `/refresh`,
+`/me`, and `/logout` proxy Supabase Auth and keep browser tokens in secure,
+httpOnly cookies. FastAPI verifies this project's legacy HS256 user tokens and
+also supports JWKS after a future asymmetric signing-key rotation. Paid access
+comes from `ai_entitlements`, never the extension's demo plan.
 
 `AI_PROVIDER=mock` and `AI_MODEL=gpt-5.4-mini` are configuration defaults.
 The mock provider is deterministic and validates the same structured response
@@ -48,8 +49,9 @@ stored in or exposed to the extension.
 ## Key flows
 
 1. The existing extension runs locally and offline exactly as before.
-2. A future Supabase-authenticated client can upsert a profile and onboarding answers.
-3. A future document processor creates metadata, then stores extracted chunks.
+2. A Supabase-authenticated client can upsert a profile and onboarding answers.
+3. Authenticated users can create protected document metadata and extracted
+   chunks; binary parsers remain a separate future processor.
 4. Users explicitly choose whether a completed writing session becomes AI
    memory; keystrokes are never automatically persisted as AI memory.
 5. Suggestion requests retrieve only the requesting user's highest-overlap
@@ -61,10 +63,12 @@ stored in or exposed to the extension.
 
 - **MOCKED:** the AI provider is a deterministic local fallback; no external
   model or embeddings call is enabled in this phase.
-- The migration creates the protected Storage bucket and metadata schema, but
-  upload/processors are not enabled until project credentials are connected.
-- Supabase Auth, entitlement lookups, and PostgREST runtime calls remain
-  fail-closed because the user chose migration/configuration only for Phase 1.
+- The private Storage bucket and document metadata/chunk schema are live, but
+  binary upload/parsers and embeddings generation are not enabled yet.
+- Supabase Auth verifies legacy HS256 access tokens with the project JWT secret
+  (and supports JWKS for a future asymmetric-key rotation). FastAPI forwards
+  the verified user token to PostgREST, so RLS remains authoritative; service-
+  role calls are restricted to entitlement lookup and usage writes.
 
 ## Extension AI onboarding foundation
 
@@ -76,5 +80,12 @@ captures a writing goal, audience, current projects, and topics to avoid.
 The draft is sanitized by `extension/shared/ai-profile.js` and stored inside
 `wc_settings.aiProfileDraft` with `syncStatus: "local_only"`. It is never sent
 to the backend automatically. Skipping the step does not erase an existing
-draft. `toApiProfile()` prepares the future Supabase payload shape, but only an
-explicit user sync after Supabase Auth is connected may call it.
+draft. `toApiProfile()` prepares the Supabase payload shape, but the current
+extension still requires a future explicit sign-in/sync control before sending it.
+
+## Verified Supabase isolation
+
+Two confirmed test accounts with active Pro entitlements are documented in
+`memory/test_credentials.md`. Public-ingress verification proved separate
+profiles and memories, blocked cross-user memory deletion and document status
+access, generated a suggestion, and recorded user-scoped usage through RLS.
