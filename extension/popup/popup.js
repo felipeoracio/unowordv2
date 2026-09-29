@@ -68,11 +68,19 @@ const els = {
   progHistory:  $('prog-history'),
 
   // prompt
+  promptEyebrow:$('prompt-eyebrow'),
   promptText:   $('prompt-text'),
   promptGoal:   $('prompt-goal'),
   promptEmpty:  $('prompt-empty'),
   promptAnother:$('prompt-another'),
   promptEditThemes: $('prompt-edit-themes'),
+  promptAiCard: $('prompt-ai-card'),
+  promptAiTitle:$('prompt-ai-title'),
+  promptAiSuggestion:$('prompt-ai-suggestion'),
+  promptAiReason:$('prompt-ai-reason'),
+  promptAiWhy:  $('prompt-ai-why'),
+  promptAiTopics:$('prompt-ai-topics'),
+  promptAiStatus:$('prompt-ai-status'),
 
   // upgrade CTA & screen
   openUpgrade:  $('open-upgrade'),
@@ -457,19 +465,81 @@ function stopDurationTicker() { if (durationTicker) { clearInterval(durationTick
 
 // ---------- prompt ----------
 
-async function renderPrompt() {
-  if (!isPro()) return;
-  const r = await sendMessage({ type: 'GET_PROMPT' });
-  if (!r.ok) return;
-  promptState = r.prompt;
+let aiSuggestion = null;
+let aiMode = false;
+
+function renderAISuggestion(sug) {
+  aiSuggestion = sug;
+  aiMode = true;
+  els.promptEyebrow.setAttribute('data-i18n', 'prompt.ai.eyebrow');
+  els.promptEyebrow.textContent = t('prompt.ai.eyebrow');
+  els.promptText.hidden = true;
+  els.promptAiCard.hidden = false;
+  els.promptAiTitle.textContent = sug.title || '';
+  els.promptAiSuggestion.textContent = sug.suggestion || '';
+  els.promptAiReason.textContent = sug.reason || '';
+  els.promptAiWhy.hidden = !sug.reason;
+  els.promptAiTopics.innerHTML = '';
+  (sug.related_topics || []).slice(0, 6).forEach((topic) => {
+    const chip = document.createElement('span');
+    chip.className = 'wc__prompt-ai-topic';
+    chip.setAttribute('data-testid', 'prompt-ai-topic');
+    chip.textContent = topic;
+    els.promptAiTopics.appendChild(chip);
+  });
+  els.promptAnother.textContent = t('prompt.ai.another');
+  els.promptGoal.hidden = false;
+  els.promptGoal.textContent = t('prompt.yourGoal', { n: fmtNumber(settings?.wordGoal || 250) });
+  els.promptEmpty.hidden = true;
+  els.promptAiStatus.hidden = true;
+}
+
+function renderStaticPrompt(reasonKey = null) {
+  aiMode = false;
+  aiSuggestion = null;
+  els.promptEyebrow.setAttribute('data-i18n', 'prompt.today');
+  els.promptEyebrow.textContent = t('prompt.today');
   const hasPrompt = promptState && promptState.text;
   els.promptText.hidden = !hasPrompt;
   els.promptGoal.hidden = !hasPrompt;
   els.promptEmpty.hidden = hasPrompt;
+  els.promptAiCard.hidden = true;
+  els.promptAnother.textContent = t('prompt.another');
   if (hasPrompt) {
     els.promptText.textContent = promptState.text;
     els.promptGoal.textContent = t('prompt.yourGoal', { n: fmtNumber(settings?.wordGoal || 250) });
   }
+  if (reasonKey) {
+    els.promptAiStatus.hidden = false;
+    els.promptAiStatus.textContent = t(reasonKey);
+  } else {
+    els.promptAiStatus.hidden = true;
+  }
+}
+
+async function loadStaticPromptData() {
+  const r = await sendMessage({ type: 'GET_PROMPT' });
+  if (r.ok) promptState = r.prompt;
+}
+
+async function renderPrompt() {
+  if (!isPro()) return;
+  await loadStaticPromptData();
+  const canUseAI = !!account.authenticated && !!account.aiAccess && account.online !== false;
+  if (!canUseAI) {
+    renderStaticPrompt();
+    return;
+  }
+  // Show a lightweight loading state while we call the personalized endpoint.
+  els.promptAiStatus.hidden = false;
+  els.promptAiStatus.textContent = t('prompt.ai.loading');
+  const result = await sendMessage({ type: 'GET_AI_SUGGESTION', currentProject: '' });
+  if (result.ok && result.suggestion) {
+    renderAISuggestion(result.suggestion);
+    return;
+  }
+  const reasonKey = result.reason === 'offline' ? 'prompt.ai.error' : 'prompt.ai.fallback';
+  renderStaticPrompt(reasonKey);
 }
 
 // ---------- primary action ----------
@@ -1431,8 +1501,18 @@ function wire() {
   // Dashboard header icon opens Progress inside the popup (see wire()).
   // (kept for back-compat; no external tab is opened anymore)
 
-  // Prompt "Another"
+  // Prompt "Another" — AI mode fetches a new personalized suggestion, otherwise picks a new static prompt.
   els.promptAnother.addEventListener('click', async () => {
+    if (aiMode) {
+      els.promptAiStatus.hidden = false;
+      els.promptAiStatus.textContent = t('prompt.ai.loading');
+      const result = await sendMessage({ type: 'GET_AI_SUGGESTION', currentProject: '' });
+      if (result.ok && result.suggestion) { renderAISuggestion(result.suggestion); return; }
+      const reasonKey = result.reason === 'offline' ? 'prompt.ai.error' : 'prompt.ai.fallback';
+      await loadStaticPromptData();
+      renderStaticPrompt(reasonKey);
+      return;
+    }
     const r = await sendMessage({ type: 'ANOTHER_PROMPT' });
     if (r.ok) { promptState = r.prompt; if (promptState?.text) els.promptText.textContent = promptState.text; }
   });

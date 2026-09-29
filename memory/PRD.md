@@ -42,5 +42,13 @@
 - New onboarding UI (Phase 17).
 - Un-mocking anything outside the suggestion + embeddings path.
 
+## Phase 12 — Extension wiring (implemented 2026-09-29)
+- Extension bumped to `0.8.0`.
+- `background.js`: added `requestAISuggestion({currentWriting, currentProject})` and `GET_AI_SUGGESTION` message that authenticates via existing session cookie, POSTs `/api/ai/suggestion`, and returns `{ ok, suggestion, reason }`. Non-fatal failures map to `auth_required` / `plan_required` / `rate_limited` / `offline`.
+- `popup.html` / `popup.css`: added an AI card inside the existing prompt panel (title, suggestion, expandable "Why this", related-topic chips, subtle loading + fallback status line). All new elements have `data-testid`.
+- `popup.js`: `renderPrompt()` now tries the AI endpoint first for authenticated + AI-entitled + online users, and silently falls back to the existing static prompt library on any failure (Phase-13 seam). The "Another" button re-requests a personalized suggestion in AI mode, or picks a new static prompt otherwise.
+- i18n (en + es): added `prompt.ai.eyebrow`, `prompt.ai.why`, `prompt.ai.loading`, `prompt.ai.another`, `prompt.ai.fallback`, `prompt.ai.error`.
+- Smoke test with the Pro-entitled test user confirms `/api/ai/suggestion` returns `title` / `suggestion` / `reason` / `related_topics` populated with real personalized RAG content.
+
 ## Env keys (all in backend/.env)
 `CORS_ORIGINS`, `AI_AUTH_MODE=supabase`, `AI_PROVIDER=openai`, `AI_MODEL=gpt-5.4-mini`, `OPENAI_CHAT_MODEL`, `OPENAI_EMBED_MODEL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, `SUPABASE_DB_URL`, `SUPABASE_JWT_AUDIENCE`, `OPENAI_API_KEY`, `AI_REQUIRE_SUBSCRIPTION`, optional `AI_DAILY_REQUEST_LIMIT`.

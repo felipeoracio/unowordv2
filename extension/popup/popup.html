@@ -61,11 +61,21 @@
       <!-- ================= PROMPT (pro only) ================= -->
       <section class="wc__panel wc__prompt" id="prompt-panel" data-testid="prompt-panel" hidden>
         <div class="wc__prompt-head">
-          <span class="wc__eyebrow" data-i18n="prompt.today">Today's writing prompt</span>
+          <span class="wc__eyebrow" id="prompt-eyebrow" data-testid="prompt-eyebrow" data-i18n="prompt.today">Today's writing prompt</span>
           <button class="wc__link-btn" id="prompt-another" data-testid="prompt-another" data-i18n="prompt.another">Another prompt</button>
         </div>
         <p class="wc__prompt-text" id="prompt-text" data-testid="prompt-text">…</p>
+        <div class="wc__prompt-ai" id="prompt-ai-card" data-testid="prompt-ai-card" hidden>
+          <p class="wc__prompt-ai-title" id="prompt-ai-title" data-testid="prompt-ai-title"></p>
+          <p class="wc__prompt-ai-suggestion" id="prompt-ai-suggestion" data-testid="prompt-ai-suggestion"></p>
+          <details class="wc__prompt-ai-why" id="prompt-ai-why" data-testid="prompt-ai-why">
+            <summary data-i18n="prompt.ai.why" data-testid="prompt-ai-why-label">Why this</summary>
+            <p id="prompt-ai-reason" data-testid="prompt-ai-reason"></p>
+          </details>
+          <div class="wc__prompt-ai-topics" id="prompt-ai-topics" data-testid="prompt-ai-topics"></div>
+        </div>
         <p class="wc__prompt-goal" id="prompt-goal" data-testid="prompt-goal">Your goal: 250 words</p>
+        <p class="wc__prompt-ai-status" id="prompt-ai-status" data-testid="prompt-ai-status" hidden></p>
         <div class="wc__prompt-empty" id="prompt-empty" data-testid="prompt-empty" hidden>
           <p data-i18n="prompt.themesEmpty">Choose your themes to see a prompt.</p>
           <button class="wc__link-btn" id="prompt-edit-themes" data-i18n="prompt.editThemes">Edit themes</button>

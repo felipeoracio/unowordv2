@@ -299,6 +299,31 @@ function dayKey(ts, tz) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+async function requestAISuggestion({ currentWriting = '', currentProject = '' } = {}) {
+  const account = await refreshAccount();
+  if (!account.authenticated || !account.aiAccess || !account.online) {
+    const reason = !account.authenticated
+      ? 'auth_required'
+      : (!account.aiAccess ? 'plan_required' : 'offline');
+    return { ok: false, reason };
+  }
+  const payload = {};
+  const draft = (currentWriting || '').trim().slice(0, 20000);
+  if (draft) payload.current_writing = draft;
+  const project = (currentProject || '').trim().slice(0, 2000);
+  if (project) payload.current_project = project;
+  try {
+    const suggestion = await self.WCApi.post('/ai/suggestion', payload);
+    return { ok: true, suggestion, account };
+  } catch (error) {
+    const status = error && error.status;
+    if (status === 401) return { ok: false, reason: 'auth_required' };
+    if (status === 403) return { ok: false, reason: 'plan_required' };
+    if (status === 429) return { ok: false, reason: 'rate_limited' };
+    return { ok: false, reason: 'offline' };
+  }
+}
+
 // ---------- session lifecycle ----------
 
 async function startSession() {
@@ -821,6 +846,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case 'GET_PROMPT': {
           const prompt = await getOrCreateTodaysPrompt();
           sendResponse({ ok: true, prompt });
+          return;
+        }
+        case 'GET_AI_SUGGESTION': {
+          const settings = await getSettings();
+          const draft = settings.aiProfileDraft || {};
+          const project = (draft.currentProjects || draft.writingGoal || '').toString();
+          const result = await requestAISuggestion({
+            currentWriting: msg.currentWriting || '',
+            currentProject: msg.currentProject || project,
+          });
+          sendResponse(result);
           return;
         }
         case 'ANOTHER_PROMPT': {

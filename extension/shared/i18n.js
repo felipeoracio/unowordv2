@@ -115,6 +115,12 @@
       'prompt.another': 'Another prompt',
       'prompt.themesEmpty': 'Choose your themes to see a prompt.',
       'prompt.editThemes': 'Edit themes',
+      'prompt.ai.eyebrow': 'Personalized for you',
+      'prompt.ai.why': 'Why this',
+      'prompt.ai.loading': 'Reading your private writing context…',
+      'prompt.ai.another': 'Another personalized suggestion',
+      'prompt.ai.fallback': 'Personalized suggestions are unavailable right now — showing a general prompt.',
+      'prompt.ai.error': "Couldn't reach UnoWord AI. Showing a general prompt.",
 
       // history
       'history.title': 'Recent sessions',
@@ -471,6 +477,12 @@
       'prompt.another': 'Otro reto',
       'prompt.themesEmpty': 'Elige tus temas para ver un reto.',
       'prompt.editThemes': 'Editar temas',
+      'prompt.ai.eyebrow': 'Personalizado para ti',
+      'prompt.ai.why': 'Por qué esto',
+      'prompt.ai.loading': 'Leyendo tu contexto de escritura privado…',
+      'prompt.ai.another': 'Otra sugerencia personalizada',
+      'prompt.ai.fallback': 'Las sugerencias personalizadas no están disponibles ahora — mostrando un reto general.',
+      'prompt.ai.error': 'No pudimos conectarnos a UnoWord AI. Mostrando un reto general.',
 
       'history.title': 'Sesiones recientes',
       'history.empty1': 'Tus sesiones aparecerán aquí.',
