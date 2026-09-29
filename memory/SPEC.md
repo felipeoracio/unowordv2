@@ -65,3 +65,16 @@ stored in or exposed to the extension.
   upload/processors are not enabled until project credentials are connected.
 - Supabase Auth, entitlement lookups, and PostgREST runtime calls remain
   fail-closed because the user chose migration/configuration only for Phase 1.
+
+## Extension AI onboarding foundation
+
+The verified GitHub extension source at commit `a4fb0ba` is synchronized into
+`/app/extension`. Its existing Pro onboarding is now five steps: language,
+word goal, themes, optional AI context, and completion. The optional context
+captures a writing goal, audience, current projects, and topics to avoid.
+
+The draft is sanitized by `extension/shared/ai-profile.js` and stored inside
+`wc_settings.aiProfileDraft` with `syncStatus: "local_only"`. It is never sent
+to the backend automatically. Skipping the step does not erase an existing
+draft. `toApiProfile()` prepares the future Supabase payload shape, but only an
+explicit user sync after Supabase Auth is connected may call it.
