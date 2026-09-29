@@ -103,3 +103,22 @@ until `/api/auth/me` confirms both authentication and an active server-side
 entitlement. The first local-profile sync requires confirmation and merges
 non-empty local fields over cloud fields. After consent, future profile edits
 auto-sync; writing sessions are still never uploaded automatically.
+
+## Consent-based writing memory
+
+Extension version `0.6.0` adds Save, Don't Save, and Always Save after a session
+ends. The content script returns the active editor's text only after explicit
+Save consent or a previously confirmed Always Save preference; standard input
+events continue sending word-count deltas only. Password inputs are never
+captured and writing is limited to 100,000 characters per session.
+
+Every saved item is first encrypted with AES-GCM. A non-extractable device key
+lives in IndexedDB; `chrome.storage.local` receives ciphertext, IV, ownership,
+and queue state only. The queue holds up to 100 sessions with no expiry.
+Pre-login ciphertext remains unclaimed until a signed-in, entitled user
+explicitly attaches it. Successful cloud sync keeps the encrypted device copy
+until the user chooses Delete Synced Device Copies in AI Settings.
+
+The backend chunks saved writing into bounded overlapping retrieval records.
+`existing_session_ref` has a user-scoped unique index so offline retries cannot
+create duplicate cloud sessions.

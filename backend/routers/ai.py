@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from lib.ai_provider import get_suggestion_provider
 from lib.ai_access import get_entitlement, require_ai_user
 from lib.auth import AuthenticatedUser, auth_is_configured
+from lib.chunking import chunk_text
 from lib.dates import today_iso
 from lib.supabase_client import SupabaseAPIError, raise_http, service_rest, user_rest
 from lib.supabase_config import supabase_is_configured
@@ -180,15 +181,33 @@ async def delete_memory(memory_id: str, user: AuthenticatedUser = Depends(requir
 
 @router.post("/writing-sessions", response_model=AIWritingSession, status_code=status.HTTP_201_CREATED)
 async def save_writing_session(payload: AIWritingSessionCreate, user: AuthenticatedUser = Depends(require_ai_user)) -> AIWritingSession:
-    session_body = {**payload.model_dump(), "user_id": user.id}
-    if not payload.save_to_memory:
-        session_body["content"] = None
+    session: AIWritingSession | None = None
+    if payload.existing_session_ref:
+        existing = await _user_rows(
+            "ai_writing_sessions",
+            user,
+            extra={"existing_session_ref": f"eq.{payload.existing_session_ref}", "limit": "1"},
+        )
+        if existing:
+            session = AIWritingSession(**existing[0])
     try:
-        sessions = await user_rest("POST", "ai_writing_sessions", user.access_token, json=session_body, prefer="return=representation")
-        session = AIWritingSession(**sessions[0])
+        if session is None:
+            session_body = {**payload.model_dump(), "user_id": user.id}
+            if not payload.save_to_memory:
+                session_body["content"] = None
+            sessions = await user_rest("POST", "ai_writing_sessions", user.access_token, json=session_body, prefer="return=representation")
+            session = AIWritingSession(**sessions[0])
         if payload.save_to_memory and payload.content:
-            chunk = AIWritingChunk(user_id=user.id, writing_session_id=session.id, chunk_index=0, content=payload.content)
-            await user_rest("POST", "ai_writing_chunks", user.access_token, json=chunk.model_dump(mode="json"), prefer="return=minimal")
+            chunks = [
+                AIWritingChunk(user_id=user.id, writing_session_id=session.id, chunk_index=index, content=content).model_dump(mode="json")
+                for index, content in enumerate(chunk_text(payload.content))
+            ]
+            await user_rest(
+                "POST", "ai_writing_chunks", user.access_token,
+                params={"on_conflict": "writing_session_id,chunk_index"},
+                json=chunks,
+                prefer="resolution=merge-duplicates,return=minimal",
+            )
     except SupabaseAPIError as error:
         raise_http(error)
     return session

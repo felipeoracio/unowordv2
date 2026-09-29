@@ -19,6 +19,7 @@ importScripts('shared/history.js');
 importScripts('shared/prompts.js');
 importScripts('shared/ai-profile.js');
 importScripts('shared/api-client.js');
+importScripts('shared/memory-queue.js');
 
 const STATE_KEY    = 'wc_state';
 const SETTINGS_KEY = 'wc_settings';
@@ -64,6 +65,8 @@ const DEFAULT_SETTINGS = {
   // Optional AI onboarding draft. Local-only until the user explicitly syncs
   // after Supabase Auth is connected in a later phase.
   aiProfileDraft: self.WCAIProfile.createDraft(),
+  aiMemoryPreference: 'ask',  // 'ask' | 'always'
+  aiMemoryLastHandledSession: null,
 };
 
 const DEFAULT_PROMPT = {
@@ -208,6 +211,70 @@ async function maybeAutoSyncProfile(profile) {
     await setSettings({ ...settings, aiProfileDraft: pending });
     return pending;
   }
+}
+
+async function captureActiveEditor(preferredTabId = null) {
+  let tabId = preferredTabId;
+  if (!tabId) {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    tabId = tabs && tabs[0] && tabs[0].id;
+  }
+  if (!tabId) throw new Error('no_editor');
+  return new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(tabId, { type: 'CAPTURE_ACTIVE_EDITOR' }, (response) => {
+      if (chrome.runtime.lastError) { reject(new Error('no_editor')); return; }
+      if (!response || !response.ok) { reject(new Error(response?.error || 'no_editor')); return; }
+      resolve(response.text);
+    });
+  });
+}
+
+async function syncQueueEntry(entry) {
+  const payload = await self.WCMemoryQueue.readPayload(entry);
+  const saved = await self.WCApi.post('/ai/writing-sessions', payload);
+  await self.WCMemoryQueue.markSynced(entry.id, saved.id);
+  return saved;
+}
+
+async function syncOwnedMemoryQueue(account) {
+  if (!account.authenticated || !account.aiAccess) throw new Error('ai_access_required');
+  const pending = await self.WCMemoryQueue.pendingForOwner(account.userId);
+  let synced = 0;
+  for (const entry of pending) {
+    try { await syncQueueEntry(entry); synced++; }
+    catch (error) {
+      if (error.status === 401 || error.status === 403) throw error;
+      break; // Preserve this and later ciphertext entries for a future retry.
+    }
+  }
+  return { synced, status: await self.WCMemoryQueue.status(account.userId) };
+}
+
+async function captureAndQueueMemory(lastResult, preferredTabId = null) {
+  if (!lastResult || !lastResult.startedAt) throw new Error('no_session');
+  const text = await captureActiveEditor(preferredTabId);
+  if (text.length > self.WCMemoryQueue.MAX_CHARS) throw new Error('writing_too_large');
+  const account = await getAccount();
+  const payload = {
+    existing_session_ref: String(lastResult.startedAt),
+    word_count: (lastResult.typedWords || 0) + (lastResult.pastedWords || 0),
+    writing_duration_seconds: Math.max(0, Math.floor(((lastResult.endedAt || 0) - (lastResult.startedAt || 0)) / 1000)),
+    content: text,
+    save_to_memory: true,
+  };
+  const entry = await self.WCMemoryQueue.enqueue(payload, account.authenticated ? account.userId : null);
+  const settings = await getSettings();
+  await setSettings({ ...settings, aiMemoryLastHandledSession: lastResult.startedAt });
+  let saveStatus = 'queued';
+  if (account.authenticated && account.aiAccess && account.online) {
+    try { await syncQueueEntry(entry); saveStatus = 'synced'; }
+    catch (_error) { saveStatus = 'queued'; }
+  }
+  return {
+    saveStatus,
+    queue: await self.WCMemoryQueue.status(account.authenticated ? account.userId : null),
+    settings: await getSettings(),
+  };
 }
 
 // ---------- word counting ----------
@@ -522,7 +589,7 @@ function buildPopupPayload(state, settings) {
 
 // ---------- message router ----------
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     try {
       switch (msg?.type) {
@@ -550,8 +617,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         }
         case 'STOP_SESSION': {
           const state = await stopSession();
-          const settings = await getSettings();
-          sendResponse({ ok: true, payload: buildPopupPayload(state, settings) });
+          let settings = await getSettings();
+          let memory = null;
+          const account = await getAccount();
+          if (
+            settings.aiMemoryPreference === 'always' &&
+            account.authenticated && account.aiAccess &&
+            state.lastResult?.startedAt !== settings.aiMemoryLastHandledSession
+          ) {
+            try { memory = await captureAndQueueMemory(state.lastResult, sender.tab && sender.tab.id); }
+            catch (error) { memory = { saveStatus: 'error', error: error.message }; }
+            settings = await getSettings();
+          }
+          sendResponse({ ok: true, payload: buildPopupPayload(state, settings), settings, memory });
           return;
         }
         case 'DELTA': {
@@ -625,6 +703,69 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           } catch (error) {
             sendResponse({ ok: false, error: error.message === 'auth_required' ? 'auth_required' : apiErrorCode(error) });
           }
+          return;
+        }
+        case 'SAVE_SESSION_TO_AI_MEMORY': {
+          try {
+            const state = await getState();
+            if (msg.always === true) {
+              const settings = await getSettings();
+              await setSettings({ ...settings, aiMemoryPreference: 'always' });
+            }
+            const result = await captureAndQueueMemory(state.lastResult, sender.tab && sender.tab.id);
+            sendResponse({ ok: true, ...result });
+          } catch (error) {
+            sendResponse({ ok: false, error: error.message || 'memory_save_failed' });
+          }
+          return;
+        }
+        case 'DISMISS_AI_MEMORY': {
+          const state = await getState();
+          const settings = await getSettings();
+          const next = { ...settings, aiMemoryLastHandledSession: state.lastResult?.startedAt || null };
+          await setSettings(next);
+          sendResponse({ ok: true, settings: next });
+          return;
+        }
+        case 'SET_AI_MEMORY_PREFERENCE': {
+          const settings = await getSettings();
+          const next = { ...settings, aiMemoryPreference: msg.preference === 'always' ? 'always' : 'ask' };
+          await setSettings(next);
+          sendResponse({ ok: true, settings: next });
+          return;
+        }
+        case 'GET_MEMORY_QUEUE_STATUS': {
+          const account = await getAccount();
+          sendResponse({ ok: true, queue: await self.WCMemoryQueue.status(account.authenticated ? account.userId : null) });
+          return;
+        }
+        case 'CLAIM_MEMORY_QUEUE': {
+          try {
+            const account = await refreshAccount();
+            if (!account.authenticated || !account.aiAccess) throw new Error('ai_access_required');
+            const claimed = await self.WCMemoryQueue.claimUnowned(account.userId);
+            const result = await syncOwnedMemoryQueue(account);
+            sendResponse({ ok: true, claimed, ...result });
+          } catch (error) {
+            sendResponse({ ok: false, error: error.message || apiErrorCode(error) });
+          }
+          return;
+        }
+        case 'SYNC_MEMORY_QUEUE': {
+          try {
+            const account = await refreshAccount();
+            const result = await syncOwnedMemoryQueue(account);
+            sendResponse({ ok: true, ...result });
+          } catch (error) {
+            sendResponse({ ok: false, error: error.message || apiErrorCode(error) });
+          }
+          return;
+        }
+        case 'DELETE_SYNCED_MEMORY_QUEUE': {
+          const account = await getAccount();
+          if (!account.authenticated) { sendResponse({ ok: false, error: 'auth_required' }); return; }
+          const removed = await self.WCMemoryQueue.removeSynced(account.userId);
+          sendResponse({ ok: true, removed, queue: await self.WCMemoryQueue.status(account.userId) });
           return;
         }
         case 'IS_ACTIVE': {

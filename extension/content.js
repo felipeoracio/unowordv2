@@ -95,6 +95,7 @@
   }
 
   const prevValues = new WeakMap();
+  let lastEditableTarget = null;
 
   function sendDelta(delta) {
     try {
@@ -107,6 +108,7 @@
   function onFocusIn(e) {
     const t = e.target;
     if (!isEditableTarget(t)) return;
+    lastEditableTarget = t;
     if (!prevValues.has(t)) prevValues.set(t, getElementText(t));
   }
 
@@ -123,6 +125,7 @@
   function onInput(e) {
     const t = e.target;
     if (!isEditableTarget(t)) return;
+    lastEditableTarget = t;
 
     const curr = getElementText(t);
 
@@ -143,6 +146,23 @@
 
   document.addEventListener('focusin', onFocusIn, true);
   document.addEventListener('input', onInput, true);
+
+  // Writing text is read only after an explicit AI Memory choice (or a prior
+  // Always Save consent). It is never streamed with the normal word deltas.
+  try {
+    chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+      if (message?.type !== 'CAPTURE_ACTIVE_EDITOR') return false;
+      const target = isEditableTarget(lastEditableTarget) ? lastEditableTarget : document.activeElement;
+      const isPassword = target && target.tagName === 'INPUT' && String(target.type || '').toLowerCase() === 'password';
+      if (!isEditableTarget(target) || isPassword) {
+        sendResponse({ ok: false, error: 'no_editor' });
+        return false;
+      }
+      const text = getElementText(target);
+      sendResponse(text.trim() ? { ok: true, text } : { ok: false, error: 'empty_writing' });
+      return false;
+    });
+  } catch (_e) { /* extension context invalidated */ }
 
   // =====================================================================
   // PART 2 · Floating on-screen counter

@@ -62,6 +62,13 @@ device.
   both authentication and an active AI entitlement. The first profile sync
   requires confirmation; later profile edits auto-sync and writing sessions
   remain local unless the user separately chooses to save them.
+- **Consent-based AI Memory** — After Stop, users can choose Save, Don't Save,
+  or confirm Always Save. UnoWord reads only the active editor at that event;
+  normal keystroke counting still sends word deltas, never writing text. Saved
+  writing is AES-GCM encrypted with a non-extractable device key in IndexedDB
+  and queued as ciphertext (maximum 100 sessions, no expiry). Pre-login items
+  require an explicit account claim. Synced encrypted copies remain deletable
+  from AI Settings and retries are idempotent by session reference.
 
 ---
 

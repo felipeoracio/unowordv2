@@ -110,6 +110,21 @@
 
         <button class="wc__btn wc__btn--primary" id="primary-btn" data-testid="primary-btn">Start Session</button>
         <p class="wc__helper wc__helper--center" id="helper-text" data-testid="helper-text"></p>
+        <div class="wc__memory-card" id="memory-card" data-testid="memory-card" hidden>
+          <div class="wc__memory-head" data-testid="memory-card-header">
+            <span class="wc__memory-icon" aria-hidden="true">◎</span>
+            <div>
+              <p class="wc__memory-title" data-i18n="memory.prompt.title" data-testid="memory-prompt-title">Save this writing to AI Memory?</p>
+              <p class="wc__memory-copy" id="memory-prompt-copy" data-testid="memory-prompt-copy"></p>
+            </div>
+          </div>
+          <p class="wc__memory-status" id="memory-status" data-testid="memory-status" hidden></p>
+          <div class="wc__memory-actions" id="memory-actions" data-testid="memory-actions">
+            <button class="wc__btn wc__btn--primary wc__btn--sm" id="memory-save" data-testid="memory-save" data-i18n="memory.prompt.save">Save</button>
+            <button class="wc__link-btn" id="memory-dont-save" data-testid="memory-dont-save" data-i18n="memory.prompt.dont">Don't Save</button>
+            <button class="wc__link-btn" id="memory-always-save" data-testid="memory-always-save" data-i18n="memory.prompt.always">Always Save</button>
+          </div>
+        </div>
         <button class="wc__progress-link" id="open-progress" data-testid="open-progress" data-i18n="progress.link">Progress →</button>
       </section>
 
@@ -462,6 +477,20 @@
               <p class="wc__setting-meta" id="ai-profile-meta" data-testid="ai-profile-meta"></p>
             </div>
             <button class="wc__link-btn" id="ai-profile-action" data-testid="ai-profile-action"></button>
+          </div>
+          <div class="wc__setting-row" data-testid="ai-memory-row">
+            <div class="wc__setting-row-main">
+              <p class="wc__setting-label" data-i18n="memory.settings.title" data-testid="ai-memory-label">Writing memory</p>
+              <p class="wc__setting-meta" id="ai-memory-meta" data-testid="ai-memory-meta"></p>
+            </div>
+            <button class="wc__link-btn" id="ai-memory-manage" data-testid="ai-memory-manage" data-i18n="settings.manage">Manage</button>
+          </div>
+          <div class="wc__setting-editor wc__memory-manager" id="ai-memory-editor" data-testid="ai-memory-editor" hidden>
+            <button class="wc__btn wc__btn--outline wc__btn--sm" id="memory-always-toggle" data-testid="memory-always-toggle"></button>
+            <button class="wc__link-btn" id="memory-claim-queue" data-testid="memory-claim-queue" data-i18n="memory.settings.claim">Attach pre-login writing</button>
+            <button class="wc__link-btn" id="memory-sync-queue" data-testid="memory-sync-queue" data-i18n="memory.settings.sync">Sync queued writing</button>
+            <button class="wc__link-btn wc__link-btn--danger" id="memory-delete-synced" data-testid="memory-delete-synced" data-i18n="memory.settings.deleteSynced">Delete synced device copies</button>
+            <p class="wc__memory-manager-note" id="memory-manager-note" data-testid="memory-manager-note"></p>
           </div>
           <p class="wc__footnote" data-i18n="aiSettings.syncNote" data-testid="ai-settings-sync-note">After your first confirmation, future profile edits sync automatically. Writing sessions are never uploaded automatically.</p>
         </div>

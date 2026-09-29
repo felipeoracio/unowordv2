@@ -42,6 +42,13 @@ const els = {
   durationValue:$('duration-value'),
   primaryBtn:   $('primary-btn'),
   helperText:   $('helper-text'),
+  memoryCard:   $('memory-card'),
+  memoryPromptCopy:$('memory-prompt-copy'),
+  memoryStatus: $('memory-status'),
+  memoryActions:$('memory-actions'),
+  memorySave:   $('memory-save'),
+  memoryDontSave:$('memory-dont-save'),
+  memoryAlwaysSave:$('memory-always-save'),
   streakChip:   $('streak-chip'),
   streakText:   $('streak-text'),
   openProgress: $('open-progress'),
@@ -157,12 +164,22 @@ const els = {
   aiSettingsGroup:$('ai-settings-group'),
   aiProfileMeta:$('ai-profile-meta'),
   aiProfileAction:$('ai-profile-action'),
+  aiMemoryMeta:$('ai-memory-meta'),
+  aiMemoryManage:$('ai-memory-manage'),
+  aiMemoryEditor:$('ai-memory-editor'),
+  memoryAlwaysToggle:$('memory-always-toggle'),
+  memoryClaimQueue:$('memory-claim-queue'),
+  memorySyncQueue:$('memory-sync-queue'),
+  memoryDeleteSynced:$('memory-delete-synced'),
+  memoryManagerNote:$('memory-manager-note'),
   settingsPrivacy:$('settings-privacy'),
 };
 
 let state = null;      // popup payload
 let settings = null;   // full settings from background
 let account = { authenticated: false, aiAccess: false, profileSyncEnabled: false, online: true };
+let memoryQueue = { total: 0, unclaimed: 0, pending: 0, synced: 0, full: false };
+let memoryDisplayStatus = null;
 let promptState = null;
 let durationTicker = 0;
 
@@ -254,6 +271,60 @@ function renderSession() {
     els.helperText.textContent = t('session.helperIdle');
     stopDurationTicker();
   }
+  renderMemoryPrompt();
+}
+
+function renderMemoryPrompt() {
+  const last = state && state.lastResult;
+  const handled = last && settings.aiMemoryLastHandledSession === last.startedAt;
+  const shouldShow = !!last && !state.active && (!handled || memoryDisplayStatus);
+  els.memoryCard.hidden = !shouldShow;
+  if (!shouldShow) return;
+  const canSync = account.authenticated && account.aiAccess && account.online;
+  els.memoryPromptCopy.textContent = canSync ? t('memory.prompt.bodySignedIn') : t('memory.prompt.bodyLater');
+  els.memoryActions.hidden = !!memoryDisplayStatus;
+  els.memoryStatus.hidden = !memoryDisplayStatus;
+  if (memoryDisplayStatus) els.memoryStatus.textContent = t(memoryDisplayStatus);
+}
+
+function memoryErrorKey(error) {
+  const known = ['no_editor', 'empty_writing', 'queue_full', 'writing_too_large'];
+  return known.includes(error) ? `memory.error.${error}` : 'memory.error.generic';
+}
+
+async function saveSessionMemory(always = false) {
+  els.memorySave.disabled = true;
+  els.memoryAlwaysSave.disabled = true;
+  els.memoryStatus.hidden = false;
+  els.memoryStatus.textContent = t('memory.prompt.saving');
+  const result = await sendMessage({ type: 'SAVE_SESSION_TO_AI_MEMORY', always });
+  els.memorySave.disabled = false;
+  els.memoryAlwaysSave.disabled = false;
+  if (!result.ok) {
+    els.memoryStatus.textContent = t(memoryErrorKey(result.error));
+    return;
+  }
+  settings = result.settings || settings;
+  memoryQueue = result.queue || memoryQueue;
+  memoryDisplayStatus = result.saveStatus === 'synced' ? 'memory.prompt.savedSynced' : 'memory.prompt.savedQueued';
+  renderSession();
+}
+
+async function dismissSessionMemory() {
+  const result = await sendMessage({ type: 'DISMISS_AI_MEMORY' });
+  if (result.ok) settings = result.settings;
+  memoryDisplayStatus = null;
+  renderSession();
+}
+
+function confirmAlwaysSave() {
+  showConfirm(
+    t('memory.always.confirmTitle'),
+    t('memory.always.confirmBody'),
+    t('memory.always.confirmAction'),
+    async () => { closeDialogs(); await saveSessionMemory(true); },
+    'primary',
+  );
 }
 
 // Only typed words are ever shown; pasted text never counts.
@@ -396,7 +467,15 @@ async function primaryClick() {
   const r = state.active
     ? await sendMessage({ type: 'STOP_SESSION' })
     : await sendMessage({ type: 'START_SESSION' });
-  if (r.ok) { state = r.payload; renderSession(); refreshStreak(); }
+  if (r.ok) {
+    state = r.payload;
+    if (r.settings) settings = r.settings;
+    memoryDisplayStatus = r.memory?.saveStatus === 'synced'
+      ? 'memory.prompt.savedSynced'
+      : (r.memory?.saveStatus === 'queued' ? 'memory.prompt.savedQueued' : null);
+    renderSession();
+    refreshStreak();
+  }
 }
 
 // ---------- upgrade / pro onboarding ----------
@@ -784,7 +863,14 @@ async function openSettings() {
   renderSettings();
   showPanel('settings');
   const response = await sendMessage({ type: 'GET_ACCOUNT' });
-  if (response.ok) { account = response.account; renderSettings(); }
+  if (response.ok) account = response.account;
+  await refreshMemoryQueueStatus();
+  renderSettings();
+}
+
+async function refreshMemoryQueueStatus() {
+  const response = await sendMessage({ type: 'GET_MEMORY_QUEUE_STATUS' });
+  if (response.ok) memoryQueue = response.queue;
 }
 function renderSettings() {
   // Writing group
@@ -819,6 +905,19 @@ function renderSettings() {
       : (settings.aiProfileDraft?.syncStatus === 'pending' ? 'aiSettings.pending' : 'aiSettings.local');
     els.aiProfileMeta.textContent = t(statusKey);
     els.aiProfileAction.textContent = account.profileSyncEnabled ? t('aiSettings.syncNow') : t('aiSettings.sync');
+    els.aiMemoryMeta.textContent = t('memory.settings.summary', {
+      pending: memoryQueue.pending,
+      synced: memoryQueue.synced,
+    }) + (memoryQueue.unclaimed ? ` · ${t('memory.settings.unclaimed', { n: memoryQueue.unclaimed })}` : '');
+    els.memoryAlwaysToggle.textContent = settings.aiMemoryPreference === 'always'
+      ? t('memory.settings.alwaysOff')
+      : t('memory.settings.alwaysOn');
+    els.memoryClaimQueue.hidden = memoryQueue.unclaimed === 0;
+    els.memorySyncQueue.hidden = memoryQueue.pending === 0;
+    els.memoryDeleteSynced.hidden = memoryQueue.synced === 0;
+    els.memoryManagerNote.textContent = memoryQueue.full
+      ? t('memory.settings.full')
+      : t('memory.settings.encrypted', { n: memoryQueue.total });
   }
   els.settingsPrivacy.textContent = signedIn
     ? t('settings.privacySignedIn')
@@ -831,6 +930,7 @@ function renderSettings() {
   els.goalEditor.hidden = true;
   els.themesEditor.hidden = true;
   els.languageEditor.hidden = true;
+  if (!aiAccess) els.aiMemoryEditor.hidden = true;
 }
 
 function toggleAccountEditor() {
@@ -871,10 +971,75 @@ async function submitAccount(mode) {
   els.accountEditor.hidden = true;
   const refreshed = await sendMessage({ type: 'GET_ACCOUNT' });
   if (refreshed.ok) account = refreshed.account;
+  await refreshMemoryQueueStatus();
   renderSettings();
-  if (account.aiAccess && window.WCAIProfile.hasPersonalization(settings.aiProfileDraft) && !account.profileSyncEnabled) {
+  if (account.aiAccess && memoryQueue.unclaimed > 0) {
+    requestMemoryClaim();
+  } else if (account.aiAccess && window.WCAIProfile.hasPersonalization(settings.aiProfileDraft) && !account.profileSyncEnabled) {
     requestProfileSync();
   }
+}
+
+function requestMemoryClaim() {
+  showConfirm(
+    t('memory.claim.title'),
+    t('memory.claim.body', { n: memoryQueue.unclaimed }),
+    t('memory.claim.action'),
+    claimMemoryQueue,
+    'primary',
+  );
+}
+
+async function claimMemoryQueue() {
+  els.confirmOk.disabled = true;
+  const result = await sendMessage({ type: 'CLAIM_MEMORY_QUEUE' });
+  els.confirmOk.disabled = false;
+  closeDialogs();
+  if (result.ok) { memoryQueue = result.status; renderSettings(); }
+}
+
+function toggleMemoryManager() {
+  els.aiMemoryEditor.hidden = !els.aiMemoryEditor.hidden;
+}
+
+async function setAlwaysMemoryPreference(preference) {
+  const result = await sendMessage({ type: 'SET_AI_MEMORY_PREFERENCE', preference });
+  if (result.ok) { settings = result.settings; renderSettings(); els.aiMemoryEditor.hidden = false; }
+}
+
+function toggleAlwaysMemory() {
+  if (settings.aiMemoryPreference === 'always') { setAlwaysMemoryPreference('ask'); return; }
+  showConfirm(
+    t('memory.always.confirmTitle'),
+    t('memory.always.confirmBody'),
+    t('memory.always.confirmAction'),
+    async () => { closeDialogs(); await setAlwaysMemoryPreference('always'); },
+    'primary',
+  );
+}
+
+async function syncMemoryQueue() {
+  els.memoryManagerNote.textContent = t('memory.settings.syncing');
+  const result = await sendMessage({ type: 'SYNC_MEMORY_QUEUE' });
+  if (result.ok) memoryQueue = result.status;
+  else els.memoryManagerNote.textContent = t('memory.error.generic');
+  renderSettings();
+  els.aiMemoryEditor.hidden = false;
+}
+
+function confirmDeleteSyncedMemory() {
+  showConfirm(
+    t('memory.delete.title'),
+    t('memory.delete.body'),
+    t('memory.delete.action'),
+    deleteSyncedMemory,
+  );
+}
+
+async function deleteSyncedMemory() {
+  const result = await sendMessage({ type: 'DELETE_SYNCED_MEMORY_QUEUE' });
+  closeDialogs();
+  if (result.ok) { memoryQueue = result.queue; renderSettings(); els.aiMemoryEditor.hidden = false; }
 }
 
 async function accountAction() {
@@ -1018,6 +1183,9 @@ async function onFirstLangChoice(lang) {
 
 function wire() {
   els.primaryBtn.addEventListener('click', primaryClick);
+  els.memorySave.addEventListener('click', () => saveSessionMemory(false));
+  els.memoryDontSave.addEventListener('click', dismissSessionMemory);
+  els.memoryAlwaysSave.addEventListener('click', confirmAlwaysSave);
   els.settingsBtn.addEventListener('click', openSettings);
   els.settingsBack.addEventListener('click', () => { showPanel('session'); renderSession(); });
   els.historyBtn.addEventListener('click', openHistory);
@@ -1070,6 +1238,11 @@ function wire() {
   els.accountSignIn.addEventListener('click', () => submitAccount('login'));
   els.accountCreate.addEventListener('click', () => submitAccount('signup'));
   els.aiProfileAction.addEventListener('click', aiProfileAction);
+  els.aiMemoryManage.addEventListener('click', toggleMemoryManager);
+  els.memoryAlwaysToggle.addEventListener('click', toggleAlwaysMemory);
+  els.memoryClaimQueue.addEventListener('click', requestMemoryClaim);
+  els.memorySyncQueue.addEventListener('click', syncMemoryQueue);
+  els.memoryDeleteSynced.addEventListener('click', confirmDeleteSyncedMemory);
   els.promptEditThemes.addEventListener('click', () => { openSettings(); toggleThemesEditor(); });
   els.settingsOpenHistory.addEventListener('click', () => { if (isPro()) openHistory(); else openUpgrade(); });
   els.openFeedback.addEventListener('click', openFeedback);
