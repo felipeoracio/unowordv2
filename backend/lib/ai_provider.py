@@ -87,9 +87,9 @@ class MockSuggestionProvider:
 class OpenAISuggestionProvider:
     name = "openai"
 
-    def __init__(self, model: str, api_key: str) -> None:
+    def __init__(self, model: str, api_key: str, *, timeout: float = 15.0) -> None:
         self.model = model
-        self._client = AsyncOpenAI(api_key=api_key)
+        self._client = AsyncOpenAI(api_key=api_key, timeout=timeout)
 
     async def generate_suggestion(self, context: str) -> SuggestionProviderResponse:
         response = await self._client.chat.completions.create(

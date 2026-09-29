@@ -442,22 +442,48 @@ async def create_suggestion(
     context, source_ids = _compose_prompt_context(
         payload, profile, answers, memories, previous, retrieved
     )
+
+    # Phase-13 cold-start seam: if the user's private knowledge base is empty
+    # (no profile fields, no onboarding answers, no memories, no retrieval
+    # results) skip the model call entirely and return a friendly basic
+    # suggestion. This saves tokens and gives a better first-time experience
+    # than a hallucinated "personalized" response.
+    profile_populated = bool(profile) and any(
+        (profile[0].get(field) for field in (
+            "writing_goal", "writing_style", "audience", "personal_context",
+            "primary_topics", "current_projects", "favorite_subjects",
+        ))
+    )
+    knowledge_empty = (
+        not retrieved
+        and not memories
+        and not answers
+        and not profile_populated
+        and not (payload.current_writing or payload.current_project)
+    )
+
     provider = get_suggestion_provider()
     response: SuggestionProviderResponse
     used_fallback = False
-    try:
-        response = await provider.generate_suggestion(context)
-    except Exception as error:  # noqa: BLE001 - explicit fallback surface
-        logger.warning(
-            "suggestion_provider_failed provider=%s model=%s error=%s",
-            provider.name,
-            provider.model,
-            error,
-        )
-        # Phase-13 basic fallback: never let the endpoint 5xx for the extension.
-        fallback = MockSuggestionProvider(provider.model)
-        response = await fallback.generate_suggestion(context)
+    fallback_reason: str | None = None
+    if knowledge_empty:
+        response = await MockSuggestionProvider(provider.model).generate_suggestion(context)
         used_fallback = True
+        fallback_reason = "cold_start"
+    else:
+        try:
+            response = await provider.generate_suggestion(context)
+        except Exception as error:  # noqa: BLE001 - explicit fallback surface
+            logger.warning(
+                "suggestion_provider_failed provider=%s model=%s error=%s",
+                provider.name,
+                provider.model,
+                error,
+            )
+            # Phase-13 basic fallback: never let the endpoint 5xx for the extension.
+            response = await MockSuggestionProvider(provider.model).generate_suggestion(context)
+            used_fallback = True
+            fallback_reason = "provider_error"
 
     try:
         rows = await user_rest(
@@ -479,9 +505,13 @@ async def create_suggestion(
     except SupabaseAPIError as error:
         raise_http(error)
 
+    if used_fallback:
+        request_type = f"suggestion_fallback_{fallback_reason}" if fallback_reason else "suggestion_fallback"
+    else:
+        request_type = "suggestion"
     await _record_usage(
         user.id,
-        request_type="suggestion_fallback" if used_fallback else "suggestion",
+        request_type=request_type,
         model=provider.model,
         input_tokens=response.usage.input_tokens,
         output_tokens=response.usage.output_tokens,

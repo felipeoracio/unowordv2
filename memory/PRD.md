@@ -50,5 +50,12 @@
 - i18n (en + es): added `prompt.ai.eyebrow`, `prompt.ai.why`, `prompt.ai.loading`, `prompt.ai.another`, `prompt.ai.fallback`, `prompt.ai.error`.
 - Smoke test with the Pro-entitled test user confirms `/api/ai/suggestion` returns `title` / `suggestion` / `reason` / `related_topics` populated with real personalized RAG content.
 
+## Phase 13 — Basic-prompt fallback seam (implemented 2026-09-29)
+- Extension bumped to `0.8.1`.
+- Backend cold-start seam in `routers/ai.py`: if the user has no profile fields, no onboarding answers, no memories, no retrieval results and no current draft/project, `/api/ai/suggestion` skips the OpenAI call entirely, returns the deterministic basic suggestion, and records `ai_usage.request_type='suggestion_fallback_cold_start'`. Existing runtime failures now record `suggestion_fallback_provider_error`.
+- Backend `OpenAISuggestionProvider` now uses a 15-second SDK timeout so slow OpenAI responses trigger the same silent fallback instead of hanging the popup.
+- Extension `popup.js` now has a single `getNextPrompt({draft, project})` seam. `renderPrompt()` and the "Another" handler both go through it. The status line is only shown for genuinely noisy failures (`offline`, `rate_limited`, `request_failed`); expected states (unauthenticated, non-entitled) render the plain static path silently.
+- Smoke test: seeded a brand-new cold-start user; empty-payload `/api/ai/suggestion` returned the basic prompt with `suggestion_fallback_cold_start` usage row and zero OpenAI cost. Populated user still returns real personalized RAG output with token counts.
+
 ## Env keys (all in backend/.env)
 `CORS_ORIGINS`, `AI_AUTH_MODE=supabase`, `AI_PROVIDER=openai`, `AI_MODEL=gpt-5.4-mini`, `OPENAI_CHAT_MODEL`, `OPENAI_EMBED_MODEL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, `SUPABASE_DB_URL`, `SUPABASE_JWT_AUDIENCE`, `OPENAI_API_KEY`, `AI_REQUIRE_SUBSCRIPTION`, optional `AI_DAILY_REQUEST_LIMIT`.

@@ -468,6 +468,34 @@ function stopDurationTicker() { if (durationTicker) { clearInterval(durationTick
 let aiSuggestion = null;
 let aiMode = false;
 
+/**
+ * Single Phase-13 seam: decide whether to fetch a personalized AI suggestion
+ * or fall back to the static prompt library, based on auth + entitlement +
+ * connectivity. Returns { mode, suggestion?, prompt?, statusKey? }.
+ *  - mode="ai"     → suggestion object from /api/ai/suggestion
+ *  - mode="static" → prompt object from GET_PROMPT (statusKey optional; only
+ *                    set when the fall-through is unexpected — e.g. 5xx,
+ *                    timeout, rate-limit — so authenticated free users and
+ *                    signed-out users see the plain static path silently)
+ */
+async function getNextPrompt({ draft = '', project = '' } = {}) {
+  const staticPromise = sendMessage({ type: 'GET_PROMPT' });
+  const canUseAI = !!account.authenticated && !!account.aiAccess && account.online !== false;
+  if (!canUseAI) {
+    const staticResp = await staticPromise;
+    return { mode: 'static', prompt: staticResp.ok ? staticResp.prompt : null };
+  }
+  const aiResp = await sendMessage({ type: 'GET_AI_SUGGESTION', currentWriting: draft, currentProject: project });
+  if (aiResp.ok && aiResp.suggestion) {
+    return { mode: 'ai', suggestion: aiResp.suggestion };
+  }
+  const staticResp = await staticPromise;
+  // Silent fallback for expected states; visible only when something actually broke.
+  const noisy = new Set(['offline', 'rate_limited', 'request_failed']);
+  const statusKey = noisy.has(aiResp.reason) ? 'prompt.ai.error' : null;
+  return { mode: 'static', prompt: staticResp.ok ? staticResp.prompt : null, statusKey };
+}
+
 function renderAISuggestion(sug) {
   aiSuggestion = sug;
   aiMode = true;
@@ -494,9 +522,10 @@ function renderAISuggestion(sug) {
   els.promptAiStatus.hidden = true;
 }
 
-function renderStaticPrompt(reasonKey = null) {
+function renderStaticPrompt(prompt, statusKey = null) {
   aiMode = false;
   aiSuggestion = null;
+  promptState = prompt || promptState;
   els.promptEyebrow.setAttribute('data-i18n', 'prompt.today');
   els.promptEyebrow.textContent = t('prompt.today');
   const hasPrompt = promptState && promptState.text;
@@ -509,37 +538,27 @@ function renderStaticPrompt(reasonKey = null) {
     els.promptText.textContent = promptState.text;
     els.promptGoal.textContent = t('prompt.yourGoal', { n: fmtNumber(settings?.wordGoal || 250) });
   }
-  if (reasonKey) {
+  if (statusKey) {
     els.promptAiStatus.hidden = false;
-    els.promptAiStatus.textContent = t(reasonKey);
+    els.promptAiStatus.textContent = t(statusKey);
   } else {
     els.promptAiStatus.hidden = true;
   }
 }
 
-async function loadStaticPromptData() {
-  const r = await sendMessage({ type: 'GET_PROMPT' });
-  if (r.ok) promptState = r.prompt;
-}
-
 async function renderPrompt() {
   if (!isPro()) return;
-  await loadStaticPromptData();
   const canUseAI = !!account.authenticated && !!account.aiAccess && account.online !== false;
-  if (!canUseAI) {
-    renderStaticPrompt();
-    return;
+  if (canUseAI) {
+    els.promptAiStatus.hidden = false;
+    els.promptAiStatus.textContent = t('prompt.ai.loading');
   }
-  // Show a lightweight loading state while we call the personalized endpoint.
-  els.promptAiStatus.hidden = false;
-  els.promptAiStatus.textContent = t('prompt.ai.loading');
-  const result = await sendMessage({ type: 'GET_AI_SUGGESTION', currentProject: '' });
-  if (result.ok && result.suggestion) {
+  const result = await getNextPrompt();
+  if (result.mode === 'ai') {
     renderAISuggestion(result.suggestion);
-    return;
+  } else {
+    renderStaticPrompt(result.prompt, result.statusKey);
   }
-  const reasonKey = result.reason === 'offline' ? 'prompt.ai.error' : 'prompt.ai.fallback';
-  renderStaticPrompt(reasonKey);
 }
 
 // ---------- primary action ----------
@@ -1501,16 +1520,14 @@ function wire() {
   // Dashboard header icon opens Progress inside the popup (see wire()).
   // (kept for back-compat; no external tab is opened anymore)
 
-  // Prompt "Another" — AI mode fetches a new personalized suggestion, otherwise picks a new static prompt.
+  // Prompt "Another" — routed through the same Phase-13 seam so a broken AI call quietly falls back to the static library.
   els.promptAnother.addEventListener('click', async () => {
     if (aiMode) {
       els.promptAiStatus.hidden = false;
       els.promptAiStatus.textContent = t('prompt.ai.loading');
-      const result = await sendMessage({ type: 'GET_AI_SUGGESTION', currentProject: '' });
-      if (result.ok && result.suggestion) { renderAISuggestion(result.suggestion); return; }
-      const reasonKey = result.reason === 'offline' ? 'prompt.ai.error' : 'prompt.ai.fallback';
-      await loadStaticPromptData();
-      renderStaticPrompt(reasonKey);
+      const result = await getNextPrompt();
+      if (result.mode === 'ai') { renderAISuggestion(result.suggestion); return; }
+      renderStaticPrompt(result.prompt, result.statusKey);
       return;
     }
     const r = await sendMessage({ type: 'ANOTHER_PROMPT' });
