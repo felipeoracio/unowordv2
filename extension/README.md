@@ -69,6 +69,12 @@ device.
   and queued as ciphertext (maximum 100 sessions, no expiry). Pre-login items
   require an explicit account claim. Synced encrypted copies remain deletable
   from AI Settings and retries are idempotent by session reference.
+- **Private document context** — Signed-in AI users can upload TXT, Markdown,
+  text-layer PDF, and DOCX files up to 5 MB from AI Settings. The backend
+  validates the actual format, rejects unsafe/oversized archives and scanned
+  PDFs without a text layer, stores the original in private Supabase Storage,
+  and creates bounded retrieval chunks. Delete removes the Storage object,
+  metadata, chunks, and any future cascading embeddings together.
 
 ---
 

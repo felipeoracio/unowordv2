@@ -45,3 +45,47 @@ async def aclient():
 
 
 # --- app-specific fixtures below this line ---
+
+USER_A_EMAIL = "unoword.e2e.a@example.com"
+USER_A_PASSWORD = "UnoWord-E2E-A!2026"
+USER_B_EMAIL = "unoword.e2e.b@example.com"
+USER_B_PASSWORD = "UnoWord-E2E-B!2026"
+
+
+def _login_access_token(email: str, password: str) -> str:
+    """Logs in against the live Supabase-auth-backed API and returns the bearer
+    access token straight from the login response's httpOnly cookie -- the
+    `require_user` dependency accepts the same token via `Authorization: Bearer`.
+    """
+    with httpx.Client(base_url=API_URL, timeout=30.0) as c:
+        response = c.post("/auth/login", json={"email": email, "password": password})
+        response.raise_for_status()
+        token = response.cookies.get("uno_session")
+        assert token, "login did not set uno_session cookie"
+        return token
+
+
+@pytest.fixture(scope="session")
+def user_a_token() -> str:
+    return _login_access_token(USER_A_EMAIL, USER_A_PASSWORD)
+
+
+@pytest.fixture(scope="session")
+def user_b_token() -> str:
+    return _login_access_token(USER_B_EMAIL, USER_B_PASSWORD)
+
+
+@pytest.fixture
+def client_a(user_a_token):
+    with httpx.Client(
+        base_url=API_URL, timeout=30.0, headers={"Authorization": f"Bearer {user_a_token}"}
+    ) as c:
+        yield c
+
+
+@pytest.fixture
+def client_b(user_b_token):
+    with httpx.Client(
+        base_url=API_URL, timeout=30.0, headers={"Authorization": f"Bearer {user_b_token}"}
+    ) as c:
+        yield c

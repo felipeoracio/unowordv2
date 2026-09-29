@@ -82,6 +82,7 @@ class AIDocument(AIModel):
     document_title: str
     document_type: DocumentType = "other"
     processing_status: ProcessingStatus = "pending"
+    processing_error: str | None = None
     summary: str | None = None
     word_count: int = Field(default=0, ge=0)
     created_at: datetime = Field(default_factory=utc_now)

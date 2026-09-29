@@ -6,6 +6,7 @@ managed entitlement and usage records and always include an explicit user_id.
 """
 
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from fastapi import HTTPException, status
@@ -35,10 +36,11 @@ async def _request(
     *,
     params: dict[str, str] | None = None,
     json: Any = None,
+    content: bytes | None = None,
 ) -> Any:
     try:
         async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.request(method, url, headers=headers, params=params, json=json)
+            response = await client.request(method, url, headers=headers, params=params, json=json, content=content)
     except httpx.HTTPError as exc:
         raise SupabaseAPIError(502, "Supabase is temporarily unreachable") from exc
     if response.status_code >= 400:
@@ -117,6 +119,35 @@ async def auth_request(
         f"{config.url.rstrip('/')}/auth/v1/{path.lstrip('/')}",
         {"apikey": api_key, "Authorization": f"Bearer {bearer}", "Content-Type": "application/json"},
         json=json,
+    )
+
+
+async def user_storage_upload(path: str, access_token: str, content: bytes, content_type: str) -> Any:
+    config = require_supabase_runtime()
+    return await _request(
+        "POST",
+        f"{config.url.rstrip('/')}/storage/v1/object/ai-documents/{quote(path, safe='/')}",
+        {
+            "apikey": config.anon_key,
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": content_type,
+            "x-upsert": "false",
+        },
+        content=content,
+    )
+
+
+async def user_storage_delete(path: str, access_token: str) -> Any:
+    config = require_supabase_runtime()
+    return await _request(
+        "DELETE",
+        f"{config.url.rstrip('/')}/storage/v1/object/ai-documents",
+        {
+            "apikey": config.anon_key,
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json",
+        },
+        json={"prefixes": [path]},
     )
 
 

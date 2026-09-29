@@ -55,6 +55,7 @@ export interface AIDocument {
   document_title: string;
   document_type: DocumentType;
   processing_status: ProcessingStatus;
+  processing_error: string | null;
   summary: string | null;
   word_count: number;
   created_at: string;

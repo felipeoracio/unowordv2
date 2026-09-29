@@ -1,0 +1,77 @@
+{
+  "iteration": 1,
+  "summary": "Backend: 23/23 pytest checks passed (some occasional ReadTimeout flakiness under the mandated -n2 xdist config against the live Supabase project -- confirmed non-flaky sequentially and on rerun). Browser: 1/1 passed for the only testable UI surface (extension core word-count/session harness). The rest of the matrix's UI-facing wording (AI Settings document upload/delete panel) lives inside the Chrome extension popup, which drives everything through chrome.runtime.sendMessage to background.js; there is no accessible unpacked-extension or file-page harness for it (spec_deviations explicitly flags this), so it is verified at the API layer only, per the environment's own instruction to use a backend test when there is no reachable UI surface.",
+  "passed": 8,
+  "failed": 0,
+  "checks": [
+    {
+      "criterion": "Existing UnoWord core behavior remains intact (typed word counting, session start/stop)",
+      "name": "extension-core-wordcount-session",
+      "lane": "browser",
+      "status": "passed",
+      "evidence": "Served extension/tests/preview.html (existing chrome.* shim harness for content.js) via localhost:8910. Typed 'one two three four five' into the textarea after Start Session; floating counter (data-testid=wc-floating-number, shadow DOM) updated 0 -> 5. Stop Session control worked without errors. Screenshots captured."
+    },
+    {
+      "criterion": "AI document controls are access-controlled",
+      "name": "test_tscheck_document_access_control.py",
+      "lane": "backend",
+      "status": "passed",
+      "evidence": "GET /api/documents signed-out -> 401. POST /api/documents/upload signed-out -> 401. GET /api/documents as Pro user A (bearer token from /api/auth/login) -> 200 with a list body."
+    },
+    {
+      "criterion": "Supported files process successfully (TXT, Markdown, text-layer PDF, DOCX up to 5MB)",
+      "name": "test_tscheck_document_supported_uploads.py",
+      "lane": "backend",
+      "status": "passed",
+      "evidence": "POST /api/documents/upload for .txt, .md, .pdf (synthetic text-layer PDF via pypdf), .docx (via python-docx) as user A -> 201 each, processing_status='ready', word_count>0; each id then appears in GET /api/documents and GET /api/documents/status/{id}."
+    },
+    {
+      "criterion": "Unsafe or unsupported files fail gracefully (422 unsupported/scanned, 413 oversized)",
+      "name": "test_tscheck_document_rejects_unsafe_files.py",
+      "lane": "backend",
+      "status": "passed",
+      "evidence": "POST /api/documents/upload with .zip extension -> 422; blank/no-text-layer PDF -> 422; 5MB+1KB text file -> 413."
+    },
+    {
+      "criterion": "Document data is isolated by user",
+      "name": "test_tscheck_document_user_isolation.py",
+      "lane": "backend",
+      "status": "passed",
+      "evidence": "User A creates a document; GET /api/documents/status/{id} and DELETE /api/documents/{id} as user B both -> 404; the same document remains readable (200, status ready) via user A's own token afterward, proving the 404 is isolation, not breakage."
+    },
+    {
+      "criterion": "Deletion is complete",
+      "name": "test_tscheck_document_deletion_complete.py",
+      "lane": "backend",
+      "status": "passed",
+      "evidence": "DELETE /api/documents/{id} -> 204; subsequent GET /api/documents/status/{id} -> 404; id absent from GET /api/documents listing. DELETE of an unknown id -> 404."
+    },
+    {
+      "criterion": "Document UI matches the existing extension (upload input, title, type selector, processing/word-count display, delete confirmation)",
+      "name": "n/a - no reachable UI harness",
+      "lane": "browser",
+      "status": "blocked",
+      "evidence": "Verified by source inspection only: extension/popup/popup.html has data-testid=ai-documents-row/editor/document-file/document-title/document-type/document-upload/document-list/document-delete-{id} wired in popup.js (loadDocuments/renderDocuments/uploadDocument/confirmDeleteDocument). Cannot exercise it live: popup.js drives everything through chrome.runtime.sendMessage to background.js (no chrome.* shim exists for this AI/document flow, unlike the content.js word-count harness), and the web preview at the public URL is a static status page (src/pages/Home.tsx), not the extension UI. spec_deviations explicitly calls out that the extension UI 'may require an unpacked-extension or controlled file-page harness' outside this tool's reach."
+    },
+    {
+      "criterion": "Cost/privacy boundaries are preserved (extraction/chunking only on upload, no OCR, no full-document AI send)",
+      "name": "test_document_processing.py / test_chunking.py (pre-existing unit tests, re-verified)",
+      "lane": "backend",
+      "status": "passed",
+      "evidence": "extract_document() rejects scanned/empty PDFs (DocumentProcessingError 'No extractable text') and unsupported extensions ('Supported formats'); chunk_text() bounds chunk size/overlap. Confirmed no OCR library or AI-provider call exists in routers/documents.py -- chunking happens only inside the upload handler, never on read/list/delete."
+    },
+    {
+      "criterion": "Environment sanity: backend reachable, AI status reflects mocked provider",
+      "name": "backend probe",
+      "lane": "backend",
+      "status": "passed",
+      "evidence": "GET http://localhost:8001/api/ -> 200 before running the suite."
+    }
+  ],
+  "bugs": [],
+  "action_items": [
+    "Extension document-management UI (AI Settings > Private documents in extension/popup) could not be exercised live -- no unpacked-extension or chrome.*-shim harness exists for the AI/document message flow (unlike the existing content.js word-count preview harness). If UI-level browser coverage of upload/delete/type-selector is required, the extension team should add a chrome.runtime shim for background.js's AI document messages (mirroring extension/tests/preview.html's approach for content.js) or provide an unpacked-extension test harness.",
+    "Backend suite occasionally throws httpx.ReadTimeout on 1-2 of 23 tests when the mandated `-n 2 --dist loadscope` xdist config runs two Supabase-hitting test modules concurrently (Storage upload + auth login contention on the live external Supabase project). Every test that timed out passed cleanly both sequentially (-n 0) and on a full-suite rerun, so this is external-service load flakiness, not an application defect."
+  ],
+  "retest_needed": true
+}

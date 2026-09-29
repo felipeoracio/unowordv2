@@ -122,3 +122,18 @@ until the user chooses Delete Synced Device Copies in AI Settings.
 The backend chunks saved writing into bounded overlapping retrieval records.
 `existing_session_ref` has a user-scoped unique index so offline retries cannot
 create duplicate cloud sessions.
+
+## Private document processing
+
+Extension version `0.7.0` adds document management under authenticated AI
+Settings. Uploads support UTF-8 TXT/Markdown, text-layer PDF, and DOCX up to
+5 MB. The backend validates extensions plus PDF/ZIP signatures, bounds PDF
+pages and DOCX archive expansion, rejects password-protected or scanned PDFs,
+and never performs OCR in this phase.
+
+Original files are stored in the private `ai-documents` Supabase bucket under
+the authenticated user's UUID. Extracted text is word-counted and split into
+bounded chunks; no entire document is sent to an AI model. Status, errors, and
+word counts remain user-scoped through entitlement checks plus RLS. Deletion
+removes the Storage object and metadata; database cascades remove chunks and
+future chunk embeddings.

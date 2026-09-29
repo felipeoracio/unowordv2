@@ -492,6 +492,40 @@
             <button class="wc__link-btn wc__link-btn--danger" id="memory-delete-synced" data-testid="memory-delete-synced" data-i18n="memory.settings.deleteSynced">Delete synced device copies</button>
             <p class="wc__memory-manager-note" id="memory-manager-note" data-testid="memory-manager-note"></p>
           </div>
+          <div class="wc__setting-row" data-testid="ai-documents-row">
+            <div class="wc__setting-row-main">
+              <p class="wc__setting-label" data-i18n="documents.title" data-testid="ai-documents-label">Private documents</p>
+              <p class="wc__setting-meta" id="ai-documents-meta" data-testid="ai-documents-meta"></p>
+            </div>
+            <button class="wc__link-btn" id="ai-documents-manage" data-testid="ai-documents-manage" data-i18n="settings.manage">Manage</button>
+          </div>
+          <div class="wc__setting-editor wc__documents-manager" id="ai-documents-editor" data-testid="ai-documents-editor" hidden>
+            <p class="wc__helper" data-i18n="documents.helper" data-testid="documents-helper">Upload TXT, Markdown, PDF, or DOCX files. UnoWord extracts text privately; scanned PDFs are not supported yet.</p>
+            <input type="file" id="document-file" data-testid="document-file" accept=".txt,.md,.markdown,.pdf,.docx,text/plain,text/markdown,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+            <label class="wc__field" for="document-title" data-testid="document-title-field">
+              <span data-i18n="documents.documentTitle" data-testid="document-title-label">Document title</span>
+              <input id="document-title" maxlength="300" data-testid="document-title" data-i18n-placeholder="documents.titlePlaceholder" />
+            </label>
+            <label class="wc__field" for="document-type" data-testid="document-type-field">
+              <span data-i18n="documents.documentType" data-testid="document-type-label">Document type</span>
+              <select id="document-type" data-testid="document-type">
+                <option value="memoir" data-i18n="documents.type.memoir">Memoir</option>
+                <option value="journal" data-i18n="documents.type.journal">Journal</option>
+                <option value="book" data-i18n="documents.type.book">Book</option>
+                <option value="research" data-i18n="documents.type.research">Research</option>
+                <option value="outline" data-i18n="documents.type.outline">Outline</option>
+                <option value="notes" data-i18n="documents.type.notes">Notes</option>
+                <option value="personal_history" data-i18n="documents.type.personal_history">Personal history</option>
+                <option value="reference" data-i18n="documents.type.reference">Reference</option>
+                <option value="other" data-i18n="documents.type.other" selected>Other</option>
+              </select>
+            </label>
+            <button class="wc__btn wc__btn--primary wc__btn--sm" id="document-upload" data-testid="document-upload" data-i18n="documents.upload">Upload privately</button>
+            <p class="wc__error" id="document-error" data-testid="document-error" hidden></p>
+            <p class="wc__memory-manager-note" id="document-upload-status" data-testid="document-upload-status" hidden></p>
+            <div class="wc__document-list" id="document-list" data-testid="document-list"></div>
+            <p class="wc__memory-manager-note" id="document-empty" data-testid="document-empty" data-i18n="documents.empty">No private documents uploaded yet.</p>
+          </div>
           <p class="wc__footnote" data-i18n="aiSettings.syncNote" data-testid="ai-settings-sync-note">After your first confirmation, future profile edits sync automatically. Writing sessions are never uploaded automatically.</p>
         </div>
 
@@ -546,6 +580,7 @@
     <script src="../shared/prompts.js"></script>
     <script src="../shared/history.js"></script>
     <script src="../shared/ai-profile.js"></script>
+    <script src="../shared/api-client.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

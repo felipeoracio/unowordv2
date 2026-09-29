@@ -22,6 +22,20 @@ test('API errors preserve the response status', async () => {
   await assert.rejects(() => API.get('/auth/me'), (error) => error instanceof API.ApiError && error.status === 401);
 });
 
+test('multipart uploads keep browser-generated content headers', async () => {
+  let captured;
+  global.fetch = async (url, options) => {
+    captured = { url, options };
+    return { ok: true, status: 201, json: async () => ({ id: 'document-id' }) };
+  };
+  const form = new FormData();
+  form.append('document_title', 'Notes');
+  await API.upload('/documents/upload', form);
+  assert.equal(captured.options.credentials, 'include');
+  assert.equal(captured.options.headers, undefined);
+  assert.equal(captured.options.body, form);
+});
+
 (async () => {
   let passed = 0, failed = 0;
   for (const [name, fn] of tests) {

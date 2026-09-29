@@ -172,6 +172,17 @@ const els = {
   memorySyncQueue:$('memory-sync-queue'),
   memoryDeleteSynced:$('memory-delete-synced'),
   memoryManagerNote:$('memory-manager-note'),
+  aiDocumentsMeta:$('ai-documents-meta'),
+  aiDocumentsManage:$('ai-documents-manage'),
+  aiDocumentsEditor:$('ai-documents-editor'),
+  documentFile:$('document-file'),
+  documentTitle:$('document-title'),
+  documentType:$('document-type'),
+  documentUpload:$('document-upload'),
+  documentError:$('document-error'),
+  documentUploadStatus:$('document-upload-status'),
+  documentList:$('document-list'),
+  documentEmpty:$('document-empty'),
   settingsPrivacy:$('settings-privacy'),
 };
 
@@ -180,6 +191,7 @@ let settings = null;   // full settings from background
 let account = { authenticated: false, aiAccess: false, profileSyncEnabled: false, online: true };
 let memoryQueue = { total: 0, unclaimed: 0, pending: 0, synced: 0, full: false };
 let memoryDisplayStatus = null;
+let documents = [];
 let promptState = null;
 let durationTicker = 0;
 
@@ -865,6 +877,7 @@ async function openSettings() {
   const response = await sendMessage({ type: 'GET_ACCOUNT' });
   if (response.ok) account = response.account;
   await refreshMemoryQueueStatus();
+  if (account.authenticated && account.aiAccess) await loadDocuments();
   renderSettings();
 }
 
@@ -918,6 +931,8 @@ function renderSettings() {
     els.memoryManagerNote.textContent = memoryQueue.full
       ? t('memory.settings.full')
       : t('memory.settings.encrypted', { n: memoryQueue.total });
+    els.aiDocumentsMeta.textContent = t('documents.summary', { n: documents.length });
+    renderDocuments();
   }
   els.settingsPrivacy.textContent = signedIn
     ? t('settings.privacySignedIn')
@@ -931,6 +946,147 @@ function renderSettings() {
   els.themesEditor.hidden = true;
   els.languageEditor.hidden = true;
   if (!aiAccess) els.aiMemoryEditor.hidden = true;
+  if (!aiAccess) els.aiDocumentsEditor.hidden = true;
+}
+
+async function loadDocuments() {
+  try {
+    documents = await window.WCApi.get('/documents');
+    els.documentError.hidden = true;
+  } catch (error) {
+    documents = [];
+    els.documentError.hidden = false;
+    els.documentError.textContent = documentErrorMessage(error);
+  }
+}
+
+function documentErrorMessage(error) {
+  const detail = error && error.body && error.body.detail;
+  if (typeof detail === 'string' && detail !== 'offline') return detail;
+  return detail === 'offline' ? t('documents.error.offline') : t('documents.error.generic');
+}
+
+function renderDocuments() {
+  if (!els.documentList) return;
+  els.documentList.innerHTML = '';
+  els.documentEmpty.hidden = documents.length > 0;
+  documents.forEach((doc) => {
+    const item = window.document.createElement('article');
+    item.className = 'wc__document-item';
+    item.setAttribute('data-testid', `document-item-${doc.id}`);
+    const main = window.document.createElement('div');
+    main.className = 'wc__document-main';
+    const title = window.document.createElement('p');
+    title.className = 'wc__document-title';
+    title.textContent = doc.document_title;
+    title.setAttribute('data-testid', `document-title-${doc.id}`);
+    const meta = window.document.createElement('p');
+    meta.className = 'wc__document-meta';
+    const statusLabel = t(`documents.status.${doc.processing_status}`);
+    meta.textContent = `${statusLabel} · ${t('documents.words', { n: fmtNumber(doc.word_count) })}`;
+    meta.setAttribute('data-testid', `document-meta-${doc.id}`);
+    main.appendChild(title);
+    main.appendChild(meta);
+    if (doc.processing_error) {
+      const error = window.document.createElement('p');
+      error.className = 'wc__error';
+      error.textContent = doc.processing_error;
+      error.setAttribute('data-testid', `document-processing-error-${doc.id}`);
+      main.appendChild(error);
+    }
+    const remove = window.document.createElement('button');
+    remove.className = 'wc__link-btn wc__link-btn--danger';
+    remove.type = 'button';
+    remove.textContent = t('documents.delete');
+    remove.setAttribute('data-testid', `document-delete-${doc.id}`);
+    remove.addEventListener('click', () => confirmDeleteDocument(doc));
+    item.appendChild(main);
+    item.appendChild(remove);
+    els.documentList.appendChild(item);
+  });
+}
+
+function toggleDocumentsManager() {
+  els.aiDocumentsEditor.hidden = !els.aiDocumentsEditor.hidden;
+  if (!els.aiDocumentsEditor.hidden) renderDocuments();
+}
+
+function onDocumentFileSelected() {
+  const file = els.documentFile.files && els.documentFile.files[0];
+  if (!file) return;
+  if (!els.documentTitle.value.trim()) els.documentTitle.value = file.name.replace(/\.[^.]+$/, '');
+  els.documentError.hidden = true;
+}
+
+async function uploadDocument() {
+  const file = els.documentFile.files && els.documentFile.files[0];
+  const title = els.documentTitle.value.trim();
+  if (!file || !title) {
+    els.documentError.hidden = false;
+    els.documentError.textContent = t('documents.error.required');
+    return;
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    els.documentError.hidden = false;
+    els.documentError.textContent = t('documents.error.tooLarge');
+    return;
+  }
+  const extension = file.name.toLowerCase().split('.').pop();
+  if (!['txt', 'md', 'markdown', 'pdf', 'docx'].includes(extension)) {
+    els.documentError.hidden = false;
+    els.documentError.textContent = t('documents.error.format');
+    return;
+  }
+  const form = new FormData();
+  form.append('file', file, file.name);
+  form.append('document_title', title);
+  form.append('document_type', els.documentType.value);
+  els.documentUpload.disabled = true;
+  els.documentError.hidden = true;
+  els.documentUploadStatus.hidden = false;
+  els.documentUploadStatus.textContent = t('documents.processing');
+  try {
+    const saved = await window.WCApi.upload('/documents/upload', form);
+    documents = [saved, ...documents.filter((document) => document.id !== saved.id)];
+    els.documentFile.value = '';
+    els.documentTitle.value = '';
+    els.documentType.value = 'other';
+    els.documentUploadStatus.textContent = t('documents.uploaded');
+    renderSettings();
+    els.aiDocumentsEditor.hidden = false;
+  } catch (error) {
+    els.documentUploadStatus.hidden = true;
+    els.documentError.hidden = false;
+    els.documentError.textContent = documentErrorMessage(error);
+  } finally {
+    els.documentUpload.disabled = false;
+  }
+}
+
+function confirmDeleteDocument(document) {
+  showConfirm(
+    t('documents.deleteTitle'),
+    t('documents.deleteBody', { title: document.document_title }),
+    t('documents.deleteAction'),
+    () => deleteDocument(document.id),
+  );
+}
+
+async function deleteDocument(documentId) {
+  els.confirmOk.disabled = true;
+  try {
+    await window.WCApi.delete(`/documents/${documentId}`);
+    documents = documents.filter((document) => document.id !== documentId);
+    closeDialogs();
+    renderSettings();
+    els.aiDocumentsEditor.hidden = false;
+  } catch (error) {
+    closeDialogs();
+    els.documentError.hidden = false;
+    els.documentError.textContent = documentErrorMessage(error);
+  } finally {
+    els.confirmOk.disabled = false;
+  }
 }
 
 function toggleAccountEditor() {
@@ -1243,6 +1399,9 @@ function wire() {
   els.memoryClaimQueue.addEventListener('click', requestMemoryClaim);
   els.memorySyncQueue.addEventListener('click', syncMemoryQueue);
   els.memoryDeleteSynced.addEventListener('click', confirmDeleteSyncedMemory);
+  els.aiDocumentsManage.addEventListener('click', toggleDocumentsManager);
+  els.documentFile.addEventListener('change', onDocumentFileSelected);
+  els.documentUpload.addEventListener('click', uploadDocument);
   els.promptEditThemes.addEventListener('click', () => { openSettings(); toggleThemesEditor(); });
   els.settingsOpenHistory.addEventListener('click', () => { if (isPro()) openHistory(); else openUpgrade(); });
   els.openFeedback.addEventListener('click', openFeedback);
