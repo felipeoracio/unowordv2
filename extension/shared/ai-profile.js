@@ -33,7 +33,8 @@
       avoidTopics: normalizeListInput(source.avoidTopics, TEXT_LIMITS.avoidTopics),
       personalContext: cleanText(source.personalContext, TEXT_LIMITS.personalContext),
       onboardingCompleted: source.onboardingCompleted === true,
-      syncStatus: 'local_only',
+      syncStatus: ['local_only', 'pending', 'synced'].includes(source.syncStatus) ? source.syncStatus : 'local_only',
+      syncedAt: Number.isFinite(Number(source.syncedAt)) && Number(source.syncedAt) > 0 ? Number(source.syncedAt) : null,
       updatedAt: Number.isFinite(updatedAt) && updatedAt > 0
         ? updatedAt
         : (Number.isFinite(storedUpdatedAt) && storedUpdatedAt > 0 ? storedUpdatedAt : null),
@@ -75,7 +76,40 @@
     };
   }
 
-  const api = { TEXT_LIMITS, cleanText, sanitizeDraft, createDraft, splitList, hasPersonalization, toApiProfile };
+  function mergeWithCloud(localValue, cloudValue = {}) {
+    const local = toApiProfile(localValue);
+    const cloud = cloudValue && typeof cloudValue === 'object' ? cloudValue : {};
+    return {
+      writing_goal: local.writing_goal || cloud.writing_goal || null,
+      writing_style: local.writing_style || cloud.writing_style || null,
+      audience: local.audience || cloud.audience || null,
+      primary_topics: local.primary_topics.length ? local.primary_topics : (cloud.primary_topics || []),
+      current_projects: local.current_projects.length ? local.current_projects : (cloud.current_projects || []),
+      favorite_subjects: local.favorite_subjects.length ? local.favorite_subjects : (cloud.favorite_subjects || []),
+      avoid_topics: local.avoid_topics.length ? local.avoid_topics : (cloud.avoid_topics || []),
+      personal_context: local.personal_context || cloud.personal_context || null,
+      ai_preferences: { ...(cloud.ai_preferences || {}), ...local.ai_preferences, sync_status: 'synced' },
+    };
+  }
+
+  function fromApiProfile(value = {}, existing = {}) {
+    return sanitizeDraft({
+      ...existing,
+      writingGoal: value.writing_goal || '',
+      audience: value.audience || '',
+      currentProjects: value.current_projects || [],
+      avoidTopics: value.avoid_topics || [],
+      personalContext: value.personal_context || '',
+      onboardingCompleted: true,
+      syncStatus: 'synced',
+      syncedAt: Date.now(),
+    }, Date.now());
+  }
+
+  const api = {
+    TEXT_LIMITS, cleanText, sanitizeDraft, createDraft, splitList,
+    hasPersonalization, toApiProfile, mergeWithCloud, fromApiProfile,
+  };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   scope.WCAIProfile = api;
 })(typeof self !== 'undefined' ? self : (typeof window !== 'undefined' ? window : this));

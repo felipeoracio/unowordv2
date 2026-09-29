@@ -5,7 +5,8 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from lib.auth import AuthenticatedUser, require_user
+from lib.ai_access import require_ai_user
+from lib.auth import AuthenticatedUser
 from lib.supabase_client import SupabaseAPIError, raise_http, user_rest
 from models.ai import AIDocument, AIDocumentChunk, AIDocumentChunkCreate, AIDocumentUpload
 
@@ -23,13 +24,13 @@ async def _owned_documents(user: AuthenticatedUser, extra: dict[str, str] | None
 
 
 @router.get("", response_model=list[AIDocument])
-async def list_documents(user: AuthenticatedUser = Depends(require_user)) -> list[AIDocument]:
+async def list_documents(user: AuthenticatedUser = Depends(require_ai_user)) -> list[AIDocument]:
     rows = await _owned_documents(user, {"order": "updated_at.desc", "limit": "200"})
     return [AIDocument(**row) for row in rows]
 
 
 @router.post("/upload", response_model=AIDocument, status_code=status.HTTP_201_CREATED)
-async def create_document_metadata(payload: AIDocumentUpload, user: AuthenticatedUser = Depends(require_user)) -> AIDocument:
+async def create_document_metadata(payload: AIDocumentUpload, user: AuthenticatedUser = Depends(require_ai_user)) -> AIDocument:
     safe_filename = Path(payload.filename).name
     storage_path = f"{user.id}/{uuid4()}/{safe_filename}"
     try:
@@ -44,7 +45,7 @@ async def create_document_metadata(payload: AIDocumentUpload, user: Authenticate
 
 
 @router.get("/status/{document_id}", response_model=AIDocument)
-async def document_status(document_id: str, user: AuthenticatedUser = Depends(require_user)) -> AIDocument:
+async def document_status(document_id: str, user: AuthenticatedUser = Depends(require_ai_user)) -> AIDocument:
     rows = await _owned_documents(user, {"id": f"eq.{document_id}", "limit": "1"})
     if not rows:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
@@ -52,7 +53,7 @@ async def document_status(document_id: str, user: AuthenticatedUser = Depends(re
 
 
 @router.post("/{document_id}/chunks", response_model=AIDocumentChunk, status_code=status.HTTP_201_CREATED)
-async def add_document_chunk(document_id: str, payload: AIDocumentChunkCreate, user: AuthenticatedUser = Depends(require_user)) -> AIDocumentChunk:
+async def add_document_chunk(document_id: str, payload: AIDocumentChunkCreate, user: AuthenticatedUser = Depends(require_ai_user)) -> AIDocumentChunk:
     if not await _owned_documents(user, {"id": f"eq.{document_id}", "limit": "1"}):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
     try:

@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from lib.ai_provider import get_suggestion_provider
-from lib.auth import AuthenticatedUser, auth_is_configured, require_user
+from lib.ai_access import get_entitlement, require_ai_user
+from lib.auth import AuthenticatedUser, auth_is_configured
 from lib.dates import today_iso
 from lib.supabase_client import SupabaseAPIError, raise_http, service_rest, user_rest
 from lib.supabase_config import supabase_is_configured
@@ -41,20 +42,10 @@ async def _user_rows(table: str, user: AuthenticatedUser, *, extra: dict[str, st
 
 
 async def _entitlement(user_id: str) -> dict:
-    try:
-        rows = await service_rest(
-            "GET",
-            "ai_entitlements",
-            params={"select": "*", "user_id": f"eq.{user_id}", "limit": "1"},
-        )
-    except SupabaseAPIError as error:
-        raise_http(error)
-    if not rows or rows[0].get("status") not in {"active", "trialing"} or rows[0].get("plan") not in {"pro", "premium"}:
+    entitlement = await get_entitlement(user_id)
+    if not entitlement:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="An eligible UnoWord AI plan is required")
-    valid_until = rows[0].get("valid_until")
-    if valid_until and datetime.fromisoformat(valid_until.replace("Z", "+00:00")) < datetime.now(timezone.utc):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="UnoWord AI access has expired")
-    return rows[0]
+    return entitlement
 
 
 async def _build_context(user: AuthenticatedUser, payload: AISuggestionRequest) -> tuple[str, list[str]]:
@@ -107,7 +98,7 @@ async def ai_status() -> AIStatus:
 
 
 @router.get("/profile", response_model=AIProfile)
-async def get_profile(user: AuthenticatedUser = Depends(require_user)) -> AIProfile:
+async def get_profile(user: AuthenticatedUser = Depends(require_ai_user)) -> AIProfile:
     rows = await _user_rows("ai_profiles", user, extra={"limit": "1"})
     if rows:
         return AIProfile(**rows[0])
@@ -122,7 +113,7 @@ async def get_profile(user: AuthenticatedUser = Depends(require_user)) -> AIProf
 
 
 @router.put("/profile", response_model=AIProfile)
-async def update_profile(payload: AIProfileUpdate, user: AuthenticatedUser = Depends(require_user)) -> AIProfile:
+async def update_profile(payload: AIProfileUpdate, user: AuthenticatedUser = Depends(require_ai_user)) -> AIProfile:
     body = {"user_id": user.id, **payload.model_dump()}
     try:
         rows = await user_rest(
@@ -136,13 +127,13 @@ async def update_profile(payload: AIProfileUpdate, user: AuthenticatedUser = Dep
 
 
 @router.get("/onboarding", response_model=list[AIOnboardingAnswer])
-async def list_onboarding(user: AuthenticatedUser = Depends(require_user)) -> list[AIOnboardingAnswer]:
+async def list_onboarding(user: AuthenticatedUser = Depends(require_ai_user)) -> list[AIOnboardingAnswer]:
     rows = await _user_rows("ai_onboarding_answers", user, extra={"order": "updated_at.desc", "limit": "100"})
     return [AIOnboardingAnswer(**row) for row in rows]
 
 
 @router.put("/onboarding", response_model=AIOnboardingAnswer)
-async def upsert_onboarding(payload: AIOnboardingAnswerUpsert, user: AuthenticatedUser = Depends(require_user)) -> AIOnboardingAnswer:
+async def upsert_onboarding(payload: AIOnboardingAnswerUpsert, user: AuthenticatedUser = Depends(require_ai_user)) -> AIOnboardingAnswer:
     try:
         rows = await user_rest(
             "POST", "ai_onboarding_answers", user.access_token,
@@ -156,13 +147,13 @@ async def upsert_onboarding(payload: AIOnboardingAnswerUpsert, user: Authenticat
 
 
 @router.get("/memories", response_model=list[AIMemory])
-async def list_memories(user: AuthenticatedUser = Depends(require_user)) -> list[AIMemory]:
+async def list_memories(user: AuthenticatedUser = Depends(require_ai_user)) -> list[AIMemory]:
     rows = await _user_rows("ai_memories", user, extra={"order": "updated_at.desc", "limit": "200"})
     return [AIMemory(**row) for row in rows]
 
 
 @router.post("/memories", response_model=AIMemory, status_code=status.HTTP_201_CREATED)
-async def create_memory(payload: AIMemoryCreate, user: AuthenticatedUser = Depends(require_user)) -> AIMemory:
+async def create_memory(payload: AIMemoryCreate, user: AuthenticatedUser = Depends(require_ai_user)) -> AIMemory:
     try:
         rows = await user_rest(
             "POST", "ai_memories", user.access_token,
@@ -174,7 +165,7 @@ async def create_memory(payload: AIMemoryCreate, user: AuthenticatedUser = Depen
 
 
 @router.delete("/memories/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_memory(memory_id: str, user: AuthenticatedUser = Depends(require_user)) -> None:
+async def delete_memory(memory_id: str, user: AuthenticatedUser = Depends(require_ai_user)) -> None:
     try:
         rows = await user_rest(
             "DELETE", "ai_memories", user.access_token,
@@ -188,7 +179,7 @@ async def delete_memory(memory_id: str, user: AuthenticatedUser = Depends(requir
 
 
 @router.post("/writing-sessions", response_model=AIWritingSession, status_code=status.HTTP_201_CREATED)
-async def save_writing_session(payload: AIWritingSessionCreate, user: AuthenticatedUser = Depends(require_user)) -> AIWritingSession:
+async def save_writing_session(payload: AIWritingSessionCreate, user: AuthenticatedUser = Depends(require_ai_user)) -> AIWritingSession:
     session_body = {**payload.model_dump(), "user_id": user.id}
     if not payload.save_to_memory:
         session_body["content"] = None
@@ -204,7 +195,7 @@ async def save_writing_session(payload: AIWritingSessionCreate, user: Authentica
 
 
 @router.post("/suggestion", response_model=AISuggestion)
-async def create_suggestion(payload: AISuggestionRequest, user: AuthenticatedUser = Depends(require_user)) -> AISuggestion:
+async def create_suggestion(payload: AISuggestionRequest, user: AuthenticatedUser = Depends(require_ai_user)) -> AISuggestion:
     entitlement = await _entitlement(user.id)
     date_key = today_iso()
     daily_limit = int(entitlement.get("daily_request_limit") or os.environ.get("AI_DAILY_REQUEST_LIMIT", "0"))
@@ -250,7 +241,7 @@ async def create_suggestion(payload: AISuggestionRequest, user: AuthenticatedUse
 
 
 @router.post("/feedback", response_model=AIFeedback, status_code=status.HTTP_201_CREATED)
-async def create_feedback(payload: AISuggestionFeedbackCreate, user: AuthenticatedUser = Depends(require_user)) -> AIFeedback:
+async def create_feedback(payload: AISuggestionFeedbackCreate, user: AuthenticatedUser = Depends(require_ai_user)) -> AIFeedback:
     owned = await _user_rows("ai_suggestions", user, extra={"id": f"eq.{payload.suggestion_id}", "limit": "1"})
     if not owned:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Suggestion not found")
@@ -270,6 +261,6 @@ async def create_feedback(payload: AISuggestionFeedbackCreate, user: Authenticat
 
 
 @router.get("/usage", response_model=list[AIUsageEvent])
-async def list_usage(user: AuthenticatedUser = Depends(require_user)) -> list[AIUsageEvent]:
+async def list_usage(user: AuthenticatedUser = Depends(require_ai_user)) -> list[AIUsageEvent]:
     rows = await _user_rows("ai_usage", user, extra={"order": "created_at.desc", "limit": "200"})
     return [AIUsageEvent(**row) for row in rows]

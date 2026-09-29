@@ -7,6 +7,8 @@ export interface AuthCredentials {
 export interface AuthUser {
   id: string;
   email: string | null;
+  plan: string | null;
+  ai_access: boolean;
 }
 
 export interface AuthResult {

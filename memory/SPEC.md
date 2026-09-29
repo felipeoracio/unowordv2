@@ -80,8 +80,8 @@ captures a writing goal, audience, current projects, and topics to avoid.
 The draft is sanitized by `extension/shared/ai-profile.js` and stored inside
 `wc_settings.aiProfileDraft` with `syncStatus: "local_only"`. It is never sent
 to the backend automatically. Skipping the step does not erase an existing
-draft. `toApiProfile()` prepares the Supabase payload shape, but the current
-extension still requires a future explicit sign-in/sync control before sending it.
+draft. `toApiProfile()` prepares the Supabase payload shape used only after the
+writer signs in and explicitly confirms the first sync.
 
 ## Verified Supabase isolation
 
@@ -89,3 +89,17 @@ Two confirmed test accounts with active Pro entitlements are documented in
 `memory/test_credentials.md`. Public-ingress verification proved separate
 profiles and memories, blocked cross-user memory deletion and document status
 access, generated a suggestion, and recorded user-scoped usage through RLS.
+
+## Extension authentication and profile sync
+
+Extension version `0.5.0` adds an Account section inside the existing Settings
+panel. The service worker calls the UnoWord backend with browser-managed,
+secure httpOnly cookies; no access or refresh token is stored in
+`chrome.storage`. The manifest grants host access only to the UnoWord API host.
+
+Signed-out users retain all local writing features and see a clear sign-in
+requirement for AI access. AI settings and the AI onboarding step are hidden
+until `/api/auth/me` confirms both authentication and an active server-side
+entitlement. The first local-profile sync requires confirmation and merges
+non-empty local fields over cloud fields. After consent, future profile edits
+auto-sync; writing sessions are still never uploaded automatically.

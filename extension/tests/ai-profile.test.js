@@ -19,9 +19,9 @@ test('sanitizeDraft trims user text and preserves completion', () => {
   assert.equal(draft.updatedAt, 123);
 });
 
-test('sanitizeDraft never accepts a remote sync status', () => {
-  const draft = P.sanitizeDraft({ syncStatus: 'synced' });
-  assert.equal(draft.syncStatus, 'local_only');
+test('sanitizeDraft preserves known sync states and rejects unknown ones', () => {
+  assert.equal(P.sanitizeDraft({ syncStatus: 'synced' }).syncStatus, 'synced');
+  assert.equal(P.sanitizeDraft({ syncStatus: 'remote' }).syncStatus, 'local_only');
 });
 
 test('sanitizeDraft refreshes updatedAt after an explicit local edit', () => {
@@ -55,6 +55,25 @@ test('toApiProfile maps the draft to backend field names', () => {
   assert.deepEqual(mapped.current_projects, ['Childhood', 'First job']);
   assert.deepEqual(mapped.avoid_topics, ['Medical details']);
   assert.equal(mapped.ai_preferences.sync_status, 'local_only');
+});
+
+test('mergeWithCloud keeps non-empty local fields and preserves cloud-only fields', () => {
+  const merged = P.mergeWithCloud(
+    { writingGoal: 'Local memoir', audience: '', currentProjects: 'Book one' },
+    { writing_goal: 'Cloud goal', audience: 'Cloud readers', writing_style: 'lyrical', current_projects: ['Old project'] },
+  );
+  assert.equal(merged.writing_goal, 'Local memoir');
+  assert.equal(merged.audience, 'Cloud readers');
+  assert.equal(merged.writing_style, 'lyrical');
+  assert.deepEqual(merged.current_projects, ['Book one']);
+});
+
+test('fromApiProfile marks the local draft privately synced', () => {
+  const draft = P.fromApiProfile({ writing_goal: 'Cloud memoir', current_projects: ['Draft'] });
+  assert.equal(draft.writingGoal, 'Cloud memoir');
+  assert.equal(draft.currentProjects, 'Draft');
+  assert.equal(draft.syncStatus, 'synced');
+  assert.ok(draft.syncedAt > 0);
 });
 
 test('cleanText enforces configured limits', () => {

@@ -420,13 +420,50 @@
         <!-- Account group -->
         <div class="wc__setting-group">
           <p class="wc__setting-group-title" data-i18n="settings.account">Account</p>
-          <div class="wc__setting-row">
+          <div class="wc__setting-row" data-testid="account-status-row">
+            <div class="wc__setting-row-main">
+              <p class="wc__setting-label" data-i18n="account.aiTitle" data-testid="account-ai-title">UnoWord AI</p>
+              <p class="wc__setting-meta" id="account-meta" data-testid="account-meta"></p>
+            </div>
+            <button class="wc__link-btn" id="account-action" data-testid="account-action"></button>
+          </div>
+          <div class="wc__setting-editor wc__auth-editor" id="account-editor" data-testid="account-editor" hidden>
+            <p class="wc__helper" data-i18n="account.required" data-testid="account-required">You need to sign in and have an eligible plan to access UnoWord AI.</p>
+            <label class="wc__field" for="account-email" data-testid="account-email-field">
+              <span data-i18n="account.email" data-testid="account-email-label">Email</span>
+              <input type="email" id="account-email" autocomplete="email" data-testid="account-email" data-i18n-placeholder="account.emailPlaceholder" />
+            </label>
+            <label class="wc__field" for="account-password" data-testid="account-password-field">
+              <span data-i18n="account.password" data-testid="account-password-label">Password</span>
+              <input type="password" id="account-password" minlength="8" autocomplete="current-password" data-testid="account-password" data-i18n-placeholder="account.passwordPlaceholder" />
+            </label>
+            <p class="wc__error" id="account-error" data-testid="account-error" hidden></p>
+            <div class="wc__auth-actions" data-testid="account-auth-actions">
+              <button class="wc__btn wc__btn--primary wc__btn--sm" id="account-sign-in" data-testid="account-sign-in" data-i18n="account.signIn">Sign in</button>
+              <button class="wc__link-btn" id="account-create" data-testid="account-create" data-i18n="account.create">Create account</button>
+            </div>
+            <p class="wc__footnote" data-i18n="account.cookiePrivacy" data-testid="account-cookie-privacy">Your session is kept in a secure cookie. UnoWord never stores your password.</p>
+          </div>
+          <div class="wc__setting-row" data-testid="plan-setting-row">
             <div class="wc__setting-row-main">
               <p class="wc__setting-label" data-i18n="settings.plan">Plan</p>
               <p class="wc__setting-meta" id="plan-meta"></p>
             </div>
             <button class="wc__link-btn" id="plan-action" data-testid="plan-action"></button>
           </div>
+        </div>
+
+        <!-- AI profile is hidden until the backend confirms auth + entitlement. -->
+        <div class="wc__setting-group" id="ai-settings-group" data-testid="ai-settings-group" hidden>
+          <p class="wc__setting-group-title" data-i18n="aiSettings.title" data-testid="ai-settings-title">AI Writing Coach</p>
+          <div class="wc__setting-row" data-testid="ai-profile-row">
+            <div class="wc__setting-row-main">
+              <p class="wc__setting-label" data-i18n="aiSettings.profile" data-testid="ai-profile-label">Private writing profile</p>
+              <p class="wc__setting-meta" id="ai-profile-meta" data-testid="ai-profile-meta"></p>
+            </div>
+            <button class="wc__link-btn" id="ai-profile-action" data-testid="ai-profile-action"></button>
+          </div>
+          <p class="wc__footnote" data-i18n="aiSettings.syncNote" data-testid="ai-settings-sync-note">After your first confirmation, future profile edits sync automatically. Writing sessions are never uploaded automatically.</p>
         </div>
 
         <!-- Support group -->
@@ -441,7 +478,7 @@
           </div>
         </div>
 
-        <p class="wc__footnote" data-i18n="settings.privacy">Your writing never leaves this device.</p>
+        <p class="wc__footnote" id="settings-privacy" data-testid="settings-privacy" data-i18n="settings.privacy">Your writing never leaves this device.</p>
       </section>
 
       <!-- ================= DIALOGS ================= -->

@@ -11,6 +11,8 @@ class AuthCredentials(BaseModel):
 class AuthUser(BaseModel):
     id: str
     email: str | None = None
+    plan: str | None = None
+    ai_access: bool = False
 
 
 class AuthResult(BaseModel):

@@ -56,6 +56,12 @@ device.
   fifth, optional step for writing goals, audience, current projects and
   topics to avoid. The draft stays in `chrome.storage.local` with
   `syncStatus: "local_only"`; no network request or model training occurs.
+- **Supabase account bridge** — Settings now supports email/password sign-in
+  through the UnoWord backend. Session tokens stay in secure httpOnly cookies,
+  never `chrome.storage`. AI controls remain hidden until the backend confirms
+  both authentication and an active AI entitlement. The first profile sync
+  requires confirmation; later profile edits auto-sync and writing sessions
+  remain local unless the user separately chooses to save them.
 
 ---
 

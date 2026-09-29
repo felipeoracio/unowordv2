@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Cookie, Depends, Response, status
 
 from lib.auth import AuthenticatedUser, require_user
+from lib.ai_access import entitlement_is_active, get_entitlement
 from lib.supabase_client import SupabaseAPIError, auth_request, raise_http
 from models.auth import AuthCredentials, AuthResult, AuthUser
 
@@ -26,7 +27,7 @@ def _result(data: dict, fallback_email: str) -> AuthResult:
     user = data.get("user") or {}
     authenticated = bool(data.get("access_token"))
     return AuthResult(
-        user=AuthUser(id=str(user.get("id") or "pending-confirmation"), email=user.get("email") or fallback_email),
+        user=AuthUser(id=str(user.get("id") or "pending-confirmation"), email=user.get("email") or fallback_email, plan=None, ai_access=False),
         authenticated=authenticated,
         message="Signed in." if authenticated else "Check your email to confirm your account.",
     )
@@ -67,7 +68,13 @@ async def refresh_session(response: Response, uno_refresh: str | None = Cookie(d
 
 @router.get("/me", response_model=AuthUser)
 async def me(user: AuthenticatedUser = Depends(require_user)) -> AuthUser:
-    return AuthUser(id=user.id, email=user.email)
+    entitlement = await get_entitlement(user.id)
+    return AuthUser(
+        id=user.id,
+        email=user.email,
+        plan=entitlement.get("plan") if entitlement else None,
+        ai_access=entitlement_is_active(entitlement),
+    )
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

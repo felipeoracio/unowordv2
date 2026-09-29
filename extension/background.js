@@ -18,11 +18,13 @@ importScripts('shared/wordcount.js');
 importScripts('shared/history.js');
 importScripts('shared/prompts.js');
 importScripts('shared/ai-profile.js');
+importScripts('shared/api-client.js');
 
 const STATE_KEY    = 'wc_state';
 const SETTINGS_KEY = 'wc_settings';
 const HISTORY_KEY  = 'wc_history';
 const PROMPT_KEY   = 'wc_prompt';
+const ACCOUNT_KEY  = 'wc_account';
 
 const HISTORY_MAX        = 500;   // rich enough to power yearly aggregates
 const PROMPT_HISTORY_MAX = 12;    // avoid immediate repetition
@@ -73,6 +75,17 @@ const DEFAULT_PROMPT = {
   history: [],     // recent prompt ids to avoid repetition
 };
 
+const DEFAULT_ACCOUNT = {
+  authenticated: false,
+  userId: null,
+  email: null,
+  plan: null,
+  aiAccess: false,
+  online: true,
+  profileSyncEnabled: false,
+  profileSyncedAt: null,
+};
+
 // ---------- storage helpers ----------
 
 async function getState()   { const { [STATE_KEY]: s }    = await chrome.storage.local.get(STATE_KEY);    return { ...DEFAULT_STATE, ...(s || {}) }; }
@@ -91,6 +104,7 @@ async function getSettings(){
 }
 async function getHistory() { const { [HISTORY_KEY]: h }  = await chrome.storage.local.get(HISTORY_KEY);  return Array.isArray(h) ? h : []; }
 async function getPrompt()  { const { [PROMPT_KEY]: p }   = await chrome.storage.local.get(PROMPT_KEY);   return { ...DEFAULT_PROMPT, ...(p || {}) }; }
+async function getAccount() { const { [ACCOUNT_KEY]: a } = await chrome.storage.local.get(ACCOUNT_KEY); return { ...DEFAULT_ACCOUNT, ...(a || {}) }; }
 
 async function setState(next) {
   // typedWords / pastedWords are the authoritative session counters. They are
@@ -106,6 +120,95 @@ async function setState(next) {
 }
 async function setSettings(next) { await chrome.storage.local.set({ [SETTINGS_KEY]: next }); }
 async function setPrompt(next)   { await chrome.storage.local.set({ [PROMPT_KEY]: next });   }
+async function setAccount(next)  { await chrome.storage.local.set({ [ACCOUNT_KEY]: next }); }
+
+// ---------- Supabase account + explicit profile sync ----------
+
+function apiErrorCode(error) {
+  if (!error || !error.body) return 'offline';
+  const detail = error.body.detail;
+  if (error.status === 401 || error.status === 400) return 'invalid_credentials';
+  if (detail === 'offline' || error.status === 0) return 'offline';
+  return 'request_failed';
+}
+
+async function refreshAccount() {
+  const current = await getAccount();
+  try {
+    const user = await self.WCApi.get('/auth/me');
+    const next = {
+      ...current,
+      authenticated: true,
+      userId: user.id,
+      email: user.email,
+      plan: user.plan || null,
+      aiAccess: user.ai_access === true,
+      online: true,
+    };
+    await setAccount(next);
+    return next;
+  } catch (error) {
+    if (error.status === 401) {
+      const next = { ...DEFAULT_ACCOUNT, online: true };
+      await setAccount(next);
+      return next;
+    }
+    return { ...current, online: false };
+  }
+}
+
+async function authenticateAccount(mode, email, password) {
+  const path = mode === 'signup' ? '/auth/signup' : '/auth/login';
+  const result = await self.WCApi.post(path, { email, password });
+  if (!result.authenticated) {
+    const pending = { ...DEFAULT_ACCOUNT, email: result.user && result.user.email, online: true };
+    await setAccount(pending);
+    return { account: pending, message: result.message };
+  }
+  const account = {
+    ...DEFAULT_ACCOUNT,
+    authenticated: true,
+    userId: result.user.id,
+    email: result.user.email,
+    plan: result.user.plan || null,
+    aiAccess: result.user.ai_access === true,
+    online: true,
+  };
+  await setAccount(account);
+  return { account, message: result.message };
+}
+
+async function syncAIProfileDraft(enableAutoSync = false) {
+  const [settings, account] = await Promise.all([getSettings(), refreshAccount()]);
+  if (!account.authenticated) throw new Error('auth_required');
+  const cloud = await self.WCApi.get('/ai/profile');
+  const merged = self.WCAIProfile.mergeWithCloud(settings.aiProfileDraft, cloud);
+  const saved = await self.WCApi.put('/ai/profile', merged);
+  const syncedDraft = self.WCAIProfile.fromApiProfile(saved, settings.aiProfileDraft);
+  const nextSettings = { ...settings, aiProfileDraft: syncedDraft };
+  const nextAccount = {
+    ...account,
+    online: true,
+    profileSyncEnabled: enableAutoSync || account.profileSyncEnabled,
+    profileSyncedAt: Date.now(),
+  };
+  await Promise.all([setSettings(nextSettings), setAccount(nextAccount)]);
+  return { profile: syncedDraft, account: nextAccount };
+}
+
+async function maybeAutoSyncProfile(profile) {
+  const account = await getAccount();
+  if (!account.authenticated || !account.profileSyncEnabled) return profile;
+  try {
+    const result = await syncAIProfileDraft(false);
+    return result.profile;
+  } catch (_error) {
+    const settings = await getSettings();
+    const pending = self.WCAIProfile.sanitizeDraft({ ...settings.aiProfileDraft, syncStatus: 'pending' }, Date.now());
+    await setSettings({ ...settings, aiProfileDraft: pending });
+    return pending;
+  }
+}
 
 // ---------- word counting ----------
 // Tokenization + session math live in shared/wordcount.js (imported above),
@@ -430,12 +533,12 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           return;
         }
         case 'GET_ALL': {
-          const [state, settings, history, prompt] = await Promise.all([
-            getState(), getSettings(), getHistory(), getPrompt(),
+          const [state, settings, history, prompt, account] = await Promise.all([
+            getState(), getSettings(), getHistory(), getPrompt(), getAccount(),
           ]);
           sendResponse({ ok: true,
             payload: buildPopupPayload(state, settings),
-            settings, history, prompt,
+            settings, history, prompt, account,
           });
           return;
         }
@@ -472,6 +575,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             : current.aiProfileDraft;
           const next = { ...current, ...patch, profile: nextProfile, aiProfileDraft: nextAIProfile };
           await setSettings(next);
+          if (patch.aiProfileDraft) next.aiProfileDraft = await maybeAutoSyncProfile(next.aiProfileDraft);
           const state = await getState();
           broadcastState(state).catch(() => {});
           sendResponse({ ok: true, settings: next });
@@ -490,7 +594,37 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           );
           const next = { ...settings, aiProfileDraft: profile };
           await setSettings(next);
-          sendResponse({ ok: true, profile });
+          const synced = await maybeAutoSyncProfile(profile);
+          sendResponse({ ok: true, profile: synced });
+          return;
+        }
+        case 'GET_ACCOUNT': {
+          const account = msg.refresh === false ? await getAccount() : await refreshAccount();
+          sendResponse({ ok: true, account });
+          return;
+        }
+        case 'AUTH_ACCOUNT': {
+          try {
+            const result = await authenticateAccount(msg.mode, msg.email, msg.password);
+            sendResponse({ ok: true, ...result });
+          } catch (error) {
+            sendResponse({ ok: false, error: apiErrorCode(error) });
+          }
+          return;
+        }
+        case 'LOGOUT_ACCOUNT': {
+          try { await self.WCApi.post('/auth/logout'); } catch (_error) { /* clear local metadata regardless */ }
+          await setAccount({ ...DEFAULT_ACCOUNT, online: true });
+          sendResponse({ ok: true, account: { ...DEFAULT_ACCOUNT, online: true } });
+          return;
+        }
+        case 'SYNC_AI_PROFILE': {
+          try {
+            const result = await syncAIProfileDraft(msg.enableAutoSync !== false);
+            sendResponse({ ok: true, ...result });
+          } catch (error) {
+            sendResponse({ ok: false, error: error.message === 'auth_required' ? 'auth_required' : apiErrorCode(error) });
+          }
           return;
         }
         case 'IS_ACTIVE': {
@@ -579,5 +713,6 @@ chrome.runtime.onInstalled.addListener(async () => {
   await chrome.storage.local.set({
     [STATE_KEY]: state,
     [SETTINGS_KEY]: settings,
+    [ACCOUNT_KEY]: await getAccount(),
   });
 });

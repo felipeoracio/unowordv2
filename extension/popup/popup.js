@@ -146,10 +146,23 @@ const els = {
   languageEditor:$('language-editor'),
   planMeta:      $('plan-meta'),
   planAction:    $('plan-action'),
+  accountMeta:   $('account-meta'),
+  accountAction: $('account-action'),
+  accountEditor: $('account-editor'),
+  accountEmail:  $('account-email'),
+  accountPassword:$('account-password'),
+  accountError:  $('account-error'),
+  accountSignIn: $('account-sign-in'),
+  accountCreate: $('account-create'),
+  aiSettingsGroup:$('ai-settings-group'),
+  aiProfileMeta:$('ai-profile-meta'),
+  aiProfileAction:$('ai-profile-action'),
+  settingsPrivacy:$('settings-privacy'),
 };
 
 let state = null;      // popup payload
 let settings = null;   // full settings from background
+let account = { authenticated: false, aiAccess: false, profileSyncEnabled: false, online: true };
 let promptState = null;
 let durationTicker = 0;
 
@@ -410,12 +423,15 @@ function startProOnboarding() {
 }
 
 function updateOnboardStepView() {
+  const aiAvailable = !!account.authenticated && !!account.aiAccess;
+  const total = aiAvailable ? 5 : 4;
+  const displayStep = !aiAvailable && onboardStep === 4 ? 4 : onboardStep + 1;
   els.stepLanguage.hidden = onboardStep !== 0;
   els.stepGoal.hidden     = onboardStep !== 1;
   els.stepThemes.hidden   = onboardStep !== 2;
-  els.stepAI.hidden       = onboardStep !== 3;
+  els.stepAI.hidden       = onboardStep !== 3 || !aiAvailable;
   els.stepDone.hidden     = onboardStep !== 4;
-  els.proOnboardStep.textContent = t('onboard.step', { n: onboardStep + 1 });
+  els.proOnboardStep.textContent = t('onboard.step', { n: displayStep, total });
   els.proOnboardNext.textContent = onboardStep === 4 ? t('onboard.finish') : t('onboard.continue');
 }
 
@@ -523,9 +539,10 @@ async function proOnboardNext() {
       return;
     }
     els.onboardThemesError.hidden = true;
-    onboardStep = 3;
+    const aiAvailable = !!account.authenticated && !!account.aiAccess;
+    onboardStep = aiAvailable ? 3 : 4;
     updateOnboardStepView();
-    els.onboardAIGoal.focus();
+    if (aiAvailable) els.onboardAIGoal.focus();
     return;
   }
   if (onboardStep === 3) {
@@ -653,10 +670,13 @@ function closeDialogs() {
   els.dialogConfirm.hidden = true;
 }
 let confirmHandler = null;
-function showConfirm(title, body, okLabel, onOk) {
+function showConfirm(title, body, okLabel, onOk, variant = 'danger') {
   els.confirmTitle.textContent = title;
   els.confirmBody.textContent = body;
   els.confirmOk.textContent = okLabel;
+  els.confirmCancel.style.display = '';
+  els.confirmOk.classList.toggle('wc__btn--danger', variant === 'danger');
+  els.confirmOk.classList.toggle('wc__btn--primary', variant === 'primary');
   confirmHandler = onOk;
   openBackdrop('confirm');
 }
@@ -760,7 +780,12 @@ function sendFeedback() {
 
 // ---------- settings ----------
 
-function openSettings() { renderSettings(); showPanel('settings'); }
+async function openSettings() {
+  renderSettings();
+  showPanel('settings');
+  const response = await sendMessage({ type: 'GET_ACCOUNT' });
+  if (response.ok) { account = response.account; renderSettings(); }
+}
 function renderSettings() {
   // Writing group
   els.goalMeta.textContent = t('settings.goalMeta', { n: fmtNumber(settings.wordGoal || 250) });
@@ -774,6 +799,31 @@ function renderSettings() {
   els.planAction.textContent = isPro() ? t('settings.cancelPro') : t('settings.upgradeRow');
   els.planAction.dataset.action = isPro() ? 'cancel' : 'upgrade';
 
+  const signedIn = !!account.authenticated;
+  const aiAccess = signedIn && !!account.aiAccess;
+  if (!signedIn) {
+    els.accountMeta.textContent = t('account.signedOut');
+    els.accountAction.textContent = t('account.signIn');
+    els.accountAction.dataset.action = 'signin';
+  } else {
+    els.accountMeta.textContent = aiAccess
+      ? t('account.signedIn', { email: account.email || '' })
+      : t('account.planRequired', { email: account.email || '' });
+    els.accountAction.textContent = t('account.signOut');
+    els.accountAction.dataset.action = 'signout';
+  }
+  els.aiSettingsGroup.hidden = !aiAccess;
+  if (aiAccess) {
+    const statusKey = settings.aiProfileDraft?.syncStatus === 'synced'
+      ? 'aiSettings.synced'
+      : (settings.aiProfileDraft?.syncStatus === 'pending' ? 'aiSettings.pending' : 'aiSettings.local');
+    els.aiProfileMeta.textContent = t(statusKey);
+    els.aiProfileAction.textContent = account.profileSyncEnabled ? t('aiSettings.syncNow') : t('aiSettings.sync');
+  }
+  els.settingsPrivacy.textContent = signedIn
+    ? t('settings.privacySignedIn')
+    : t('settings.privacy');
+
   // Pro badges visibility
   [els.historyProBadge, $('goal-pro-badge'), $('themes-pro-badge')].forEach((b) => { if (b) b.hidden = isPro(); });
 
@@ -781,6 +831,91 @@ function renderSettings() {
   els.goalEditor.hidden = true;
   els.themesEditor.hidden = true;
   els.languageEditor.hidden = true;
+}
+
+function toggleAccountEditor() {
+  els.accountEditor.hidden = !els.accountEditor.hidden;
+  if (!els.accountEditor.hidden) {
+    els.accountError.hidden = true;
+    els.accountEmail.focus();
+  }
+}
+
+async function submitAccount(mode) {
+  const email = (els.accountEmail.value || '').trim();
+  const password = els.accountPassword.value || '';
+  if (!email || password.length < 8) {
+    els.accountError.hidden = false;
+    els.accountError.textContent = t('account.invalidForm');
+    return;
+  }
+  els.accountError.hidden = true;
+  els.accountSignIn.disabled = true;
+  els.accountCreate.disabled = true;
+  const result = await sendMessage({ type: 'AUTH_ACCOUNT', mode, email, password });
+  els.accountSignIn.disabled = false;
+  els.accountCreate.disabled = false;
+  if (!result.ok) {
+    els.accountError.hidden = false;
+    els.accountError.textContent = t(`account.error.${result.error || 'request_failed'}`);
+    return;
+  }
+  account = result.account;
+  els.accountPassword.value = '';
+  if (!account.authenticated) {
+    els.accountError.hidden = false;
+    els.accountError.textContent = t('account.checkEmail');
+    renderSettings();
+    return;
+  }
+  els.accountEditor.hidden = true;
+  const refreshed = await sendMessage({ type: 'GET_ACCOUNT' });
+  if (refreshed.ok) account = refreshed.account;
+  renderSettings();
+  if (account.aiAccess && window.WCAIProfile.hasPersonalization(settings.aiProfileDraft) && !account.profileSyncEnabled) {
+    requestProfileSync();
+  }
+}
+
+async function accountAction() {
+  if (els.accountAction.dataset.action === 'signin') { toggleAccountEditor(); return; }
+  const result = await sendMessage({ type: 'LOGOUT_ACCOUNT' });
+  if (result.ok) {
+    account = result.account;
+    els.accountEditor.hidden = true;
+    renderSettings();
+  }
+}
+
+function requestProfileSync() {
+  showConfirm(
+    t('aiSettings.confirmTitle'),
+    t('aiSettings.confirmBody'),
+    t('aiSettings.confirmAction'),
+    syncAIProfile,
+    'primary',
+  );
+}
+
+async function syncAIProfile() {
+  els.confirmOk.disabled = true;
+  const result = await sendMessage({ type: 'SYNC_AI_PROFILE', enableAutoSync: true });
+  els.confirmOk.disabled = false;
+  closeDialogs();
+  if (!result.ok) {
+    els.accountError.hidden = false;
+    els.accountError.textContent = t(`account.error.${result.error || 'request_failed'}`);
+    els.accountEditor.hidden = false;
+    return;
+  }
+  account = result.account;
+  settings.aiProfileDraft = result.profile;
+  renderSettings();
+}
+
+function aiProfileAction() {
+  if (account.profileSyncEnabled) syncAIProfile();
+  else requestProfileSync();
 }
 
 function toggleGoalEditor() {
@@ -931,6 +1066,10 @@ function wire() {
   els.editThemes.addEventListener('click', toggleThemesEditor);
   els.editLanguage.addEventListener('click', toggleLanguageEditor);
   els.planAction.addEventListener('click', planAction);
+  els.accountAction.addEventListener('click', accountAction);
+  els.accountSignIn.addEventListener('click', () => submitAccount('login'));
+  els.accountCreate.addEventListener('click', () => submitAccount('signup'));
+  els.aiProfileAction.addEventListener('click', aiProfileAction);
   els.promptEditThemes.addEventListener('click', () => { openSettings(); toggleThemesEditor(); });
   els.settingsOpenHistory.addEventListener('click', () => { if (isPro()) openHistory(); else openUpgrade(); });
   els.openFeedback.addEventListener('click', openFeedback);
@@ -985,10 +1124,12 @@ async function boot() {
   if (r.ok) {
     state = r.payload;
     settings = r.settings;
+    account = r.account || account;
   } else {
     // Preview fallback
     state = { active: false, typedWords: 0, pastedWords: 0, totalWords: 0, sessionGoal: 0, langChosen: true, plan: 'free', language: null, lastResult: null };
     settings = { langChosen: true, plan: 'free', wordGoal: 250, themes: [], language: null, profile: {}, aiProfileDraft: window.WCAIProfile.createDraft() };
+    account = { authenticated: false, aiAccess: false, profileSyncEnabled: false, online: false };
   }
 
   // Language: chosen/profile override → auto-detect
