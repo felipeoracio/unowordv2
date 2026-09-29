@@ -1,15 +1,29 @@
-"""RLS-backed AI profile, memory, suggestion, feedback, and usage routes."""
+"""RLS-backed AI profile, memory, suggestion, feedback, and usage routes.
 
+Phase 11 turns the suggestion path into a real per-user RAG pipeline:
+embeddings on ingest for saved writing chunks and memories, private retrieval
+via `match_user_chunks`, and an OpenAI-backed provider with a Phase-13 basic
+fallback if retrieval or the model fails.
+"""
+
+import logging
 import os
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from lib.ai_provider import get_suggestion_provider
+from lib.ai_provider import (
+    MockSuggestionProvider,
+    SuggestionProviderResponse,
+    get_suggestion_provider,
+)
 from lib.ai_access import get_entitlement, require_ai_user
 from lib.auth import AuthenticatedUser, auth_is_configured
 from lib.chunking import chunk_text
 from lib.dates import today_iso
+from lib.embeddings import get_embeddings_service
+from lib.prompts import UNO_WORD_COACH_SYSTEM_PROMPT
+from lib.retrieval import RetrievedChunk, retrieve_user_chunks
 from lib.supabase_client import SupabaseAPIError, raise_http, service_rest, user_rest
 from lib.supabase_config import supabase_is_configured
 from models.ai import (
@@ -20,11 +34,10 @@ from models.ai import (
     AIOnboardingAnswerUpsert,
     AIProfile,
     AIProfileUpdate,
+    AIStatus,
     AISuggestion,
     AISuggestionFeedbackCreate,
     AISuggestionRequest,
-    AISuggestionResult,
-    AIStatus,
     AIUsageEvent,
     AIWritingChunk,
     AIWritingSession,
@@ -32,9 +45,15 @@ from models.ai import (
 )
 
 router = APIRouter(prefix="/ai", tags=["ai"])
+logger = logging.getLogger(__name__)
 
 
-async def _user_rows(table: str, user: AuthenticatedUser, *, extra: dict[str, str] | None = None) -> list[dict]:
+async def _user_rows(
+    table: str,
+    user: AuthenticatedUser,
+    *,
+    extra: dict[str, str] | None = None,
+) -> list[dict]:
     params = {"select": "*", "user_id": f"eq.{user.id}", **(extra or {})}
     try:
         return await user_rest("GET", table, user.access_token, params=params)
@@ -45,56 +64,129 @@ async def _user_rows(table: str, user: AuthenticatedUser, *, extra: dict[str, st
 async def _entitlement(user_id: str) -> dict:
     entitlement = await get_entitlement(user_id)
     if not entitlement:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="An eligible UnoWord AI plan is required")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="An eligible UnoWord AI plan is required",
+        )
     return entitlement
 
 
-async def _build_context(user: AuthenticatedUser, payload: AISuggestionRequest) -> tuple[str, list[str]]:
-    profile = await _user_rows("ai_profiles", user, extra={"limit": "1"})
-    answers = await _user_rows("ai_onboarding_answers", user, extra={"order": "updated_at.desc", "limit": "20"})
-    memories = await _user_rows("ai_memories", user, extra={"order": "importance.desc,updated_at.desc", "limit": "30"})
-    previous = await _user_rows("ai_suggestions", user, extra={"order": "created_at.desc", "limit": "15"})
+def _compose_prompt_context(
+    payload: AISuggestionRequest,
+    profile: list[dict],
+    answers: list[dict],
+    memories: list[dict],
+    previous: list[dict],
+    retrieved: list[RetrievedChunk],
+) -> tuple[str, list[str]]:
+    """Build the composed context string and the list of related source ids.
+
+    Retrieved chunks are delimited so the model treats them as untrusted
+    evidence and does not follow any instructions embedded in them.
+    """
 
     parts: list[str] = []
     source_ids: list[str] = []
     if payload.current_writing:
-        parts.append(f"Current writing: {payload.current_writing}")
+        parts.append(f"Current writing draft:\n{payload.current_writing}")
     if payload.current_project:
-        parts.append(f"Current project: {payload.current_project}")
+        parts.append(f"Current project focus: {payload.current_project}")
     if profile:
         item = profile[0]
-        parts.append(
-            "Profile: " + "; ".join(
-                str(item.get(field)) for field in (
-                    "writing_goal", "writing_style", "audience", "primary_topics",
-                    "current_projects", "favorite_subjects", "avoid_topics", "personal_context",
-                ) if item.get(field)
+        fields = " | ".join(
+            f"{name}: {item.get(name)}"
+            for name in (
+                "writing_goal",
+                "writing_style",
+                "audience",
+                "primary_topics",
+                "current_projects",
+                "favorite_subjects",
+                "avoid_topics",
+                "personal_context",
             )
+            if item.get(name)
         )
+        if fields:
+            parts.append(f"Profile — {fields}")
         source_ids.append(item["id"])
-    for answer in answers:
+    for answer in answers[:10]:
         parts.append(f"Onboarding — {answer.get('question')}: {answer.get('answer')}")
         source_ids.append(answer["id"])
-    for memory in memories:
+    for memory in memories[:10]:
         parts.append(f"Memory ({memory.get('memory_type')}): {memory.get('memory')}")
         source_ids.append(memory["id"])
-    for suggestion in previous:
-        parts.append(f"Previous suggestion ({suggestion.get('status')}): {suggestion.get('suggestion')}")
-    return "\n".join(parts[:60]) or "No saved user context is available yet.", source_ids[:50]
+    for suggestion in previous[:5]:
+        parts.append(
+            f"Previous suggestion ({suggestion.get('status')}): {suggestion.get('suggestion')}"
+        )
+    if retrieved:
+        parts.append("Retrieved private chunks:")
+        for chunk in retrieved:
+            parts.append(
+                f"- [{chunk.source_type} sim={chunk.similarity:.2f}] {chunk.content[:600]}"
+            )
+            source_ids.append(chunk.source_id)
+    joined = "\n".join(parts[:80])
+    return joined or "No saved user context is available yet.", source_ids[:50]
+
+
+async def _record_usage(
+    user_id: str,
+    *,
+    request_type: str,
+    model: str,
+    input_tokens: int | None,
+    output_tokens: int | None,
+    provider: str,
+) -> None:
+    body: dict = {
+        "user_id": user_id,
+        "date": today_iso(),
+        "request_type": request_type,
+    }
+    if input_tokens is not None:
+        body["input_tokens"] = input_tokens
+    if output_tokens is not None:
+        body["output_tokens"] = output_tokens
+    if input_tokens is not None and output_tokens is not None:
+        # Rough cost estimate for gpt-5.4-mini class models; kept as a small
+        # heuristic. Not used for billing.
+        body["estimated_cost"] = round(
+            (input_tokens * 0.15 + output_tokens * 0.60) / 1_000_000,
+            6,
+        )
+    try:
+        await service_rest("POST", "ai_usage", json=body, prefer="return=minimal")
+    except SupabaseAPIError as error:
+        logger.warning(
+            "usage_write_failed provider=%s model=%s status=%s detail=%s",
+            provider,
+            model,
+            error.response_status,
+            error.detail,
+        )
 
 
 @router.get("/status", response_model=AIStatus)
 async def ai_status() -> AIStatus:
     provider = get_suggestion_provider()
+    embeddings = get_embeddings_service()
     configured = supabase_is_configured()
+    ready = configured and embeddings.enabled
+    detail = "Supabase Auth, PostgREST, RLS, and pgvector are connected."
+    if not configured:
+        detail = "Supabase is not configured."
+    elif not embeddings.enabled:
+        detail = "OpenAI embeddings key is not configured; retrieval will fall back."
     return AIStatus(
         auth_configured=auth_is_configured(),
         database="supabase",
         database_configured=configured,
         provider=provider.name,
         model=provider.model,
-        retrieval_ready=configured,
-        message="Supabase Auth, PostgREST, RLS, and pgvector are connected." if configured else "Supabase is not configured.",
+        retrieval_ready=ready,
+        message=detail,
     )
 
 
@@ -105,8 +197,11 @@ async def get_profile(user: AuthenticatedUser = Depends(require_ai_user)) -> AIP
         return AIProfile(**rows[0])
     try:
         created = await user_rest(
-            "POST", "ai_profiles", user.access_token,
-            json={"user_id": user.id}, prefer="return=representation",
+            "POST",
+            "ai_profiles",
+            user.access_token,
+            json={"user_id": user.id},
+            prefer="return=representation",
         )
     except SupabaseAPIError as error:
         raise_http(error)
@@ -114,12 +209,18 @@ async def get_profile(user: AuthenticatedUser = Depends(require_ai_user)) -> AIP
 
 
 @router.put("/profile", response_model=AIProfile)
-async def update_profile(payload: AIProfileUpdate, user: AuthenticatedUser = Depends(require_ai_user)) -> AIProfile:
+async def update_profile(
+    payload: AIProfileUpdate,
+    user: AuthenticatedUser = Depends(require_ai_user),
+) -> AIProfile:
     body = {"user_id": user.id, **payload.model_dump()}
     try:
         rows = await user_rest(
-            "POST", "ai_profiles", user.access_token,
-            params={"on_conflict": "user_id"}, json=body,
+            "POST",
+            "ai_profiles",
+            user.access_token,
+            params={"on_conflict": "user_id"},
+            json=body,
             prefer="resolution=merge-duplicates,return=representation",
         )
     except SupabaseAPIError as error:
@@ -128,16 +229,27 @@ async def update_profile(payload: AIProfileUpdate, user: AuthenticatedUser = Dep
 
 
 @router.get("/onboarding", response_model=list[AIOnboardingAnswer])
-async def list_onboarding(user: AuthenticatedUser = Depends(require_ai_user)) -> list[AIOnboardingAnswer]:
-    rows = await _user_rows("ai_onboarding_answers", user, extra={"order": "updated_at.desc", "limit": "100"})
+async def list_onboarding(
+    user: AuthenticatedUser = Depends(require_ai_user),
+) -> list[AIOnboardingAnswer]:
+    rows = await _user_rows(
+        "ai_onboarding_answers",
+        user,
+        extra={"order": "updated_at.desc", "limit": "100"},
+    )
     return [AIOnboardingAnswer(**row) for row in rows]
 
 
 @router.put("/onboarding", response_model=AIOnboardingAnswer)
-async def upsert_onboarding(payload: AIOnboardingAnswerUpsert, user: AuthenticatedUser = Depends(require_ai_user)) -> AIOnboardingAnswer:
+async def upsert_onboarding(
+    payload: AIOnboardingAnswerUpsert,
+    user: AuthenticatedUser = Depends(require_ai_user),
+) -> AIOnboardingAnswer:
     try:
         rows = await user_rest(
-            "POST", "ai_onboarding_answers", user.access_token,
+            "POST",
+            "ai_onboarding_answers",
+            user.access_token,
             params={"on_conflict": "user_id,question_id"},
             json={"user_id": user.id, **payload.model_dump()},
             prefer="resolution=merge-duplicates,return=representation",
@@ -149,16 +261,34 @@ async def upsert_onboarding(payload: AIOnboardingAnswerUpsert, user: Authenticat
 
 @router.get("/memories", response_model=list[AIMemory])
 async def list_memories(user: AuthenticatedUser = Depends(require_ai_user)) -> list[AIMemory]:
-    rows = await _user_rows("ai_memories", user, extra={"order": "updated_at.desc", "limit": "200"})
+    rows = await _user_rows(
+        "ai_memories",
+        user,
+        extra={"order": "updated_at.desc", "limit": "200"},
+    )
     return [AIMemory(**row) for row in rows]
 
 
 @router.post("/memories", response_model=AIMemory, status_code=status.HTTP_201_CREATED)
-async def create_memory(payload: AIMemoryCreate, user: AuthenticatedUser = Depends(require_ai_user)) -> AIMemory:
+async def create_memory(
+    payload: AIMemoryCreate,
+    user: AuthenticatedUser = Depends(require_ai_user),
+) -> AIMemory:
+    body: dict = {"user_id": user.id, **payload.model_dump()}
+    embeddings = get_embeddings_service()
+    if embeddings.enabled:
+        embedded = await embeddings.embed(payload.memory)
+        if embedded:
+            body["embedding"] = embedded.embedding
+            body["embedding_model"] = embedded.model
+            body["embedding_version"] = embedded.version
     try:
         rows = await user_rest(
-            "POST", "ai_memories", user.access_token,
-            json={"user_id": user.id, **payload.model_dump()}, prefer="return=representation",
+            "POST",
+            "ai_memories",
+            user.access_token,
+            json=body,
+            prefer="return=representation",
         )
     except SupabaseAPIError as error:
         raise_http(error)
@@ -166,10 +296,15 @@ async def create_memory(payload: AIMemoryCreate, user: AuthenticatedUser = Depen
 
 
 @router.delete("/memories/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_memory(memory_id: str, user: AuthenticatedUser = Depends(require_ai_user)) -> None:
+async def delete_memory(
+    memory_id: str,
+    user: AuthenticatedUser = Depends(require_ai_user),
+) -> None:
     try:
         rows = await user_rest(
-            "DELETE", "ai_memories", user.access_token,
+            "DELETE",
+            "ai_memories",
+            user.access_token,
             params={"id": f"eq.{memory_id}", "user_id": f"eq.{user.id}"},
             prefer="return=representation",
         )
@@ -179,14 +314,24 @@ async def delete_memory(memory_id: str, user: AuthenticatedUser = Depends(requir
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memory not found")
 
 
-@router.post("/writing-sessions", response_model=AIWritingSession, status_code=status.HTTP_201_CREATED)
-async def save_writing_session(payload: AIWritingSessionCreate, user: AuthenticatedUser = Depends(require_ai_user)) -> AIWritingSession:
+@router.post(
+    "/writing-sessions",
+    response_model=AIWritingSession,
+    status_code=status.HTTP_201_CREATED,
+)
+async def save_writing_session(
+    payload: AIWritingSessionCreate,
+    user: AuthenticatedUser = Depends(require_ai_user),
+) -> AIWritingSession:
     session: AIWritingSession | None = None
     if payload.existing_session_ref:
         existing = await _user_rows(
             "ai_writing_sessions",
             user,
-            extra={"existing_session_ref": f"eq.{payload.existing_session_ref}", "limit": "1"},
+            extra={
+                "existing_session_ref": f"eq.{payload.existing_session_ref}",
+                "limit": "1",
+            },
         )
         if existing:
             session = AIWritingSession(**existing[0])
@@ -195,15 +340,35 @@ async def save_writing_session(payload: AIWritingSessionCreate, user: Authentica
             session_body = {**payload.model_dump(), "user_id": user.id}
             if not payload.save_to_memory:
                 session_body["content"] = None
-            sessions = await user_rest("POST", "ai_writing_sessions", user.access_token, json=session_body, prefer="return=representation")
+            sessions = await user_rest(
+                "POST",
+                "ai_writing_sessions",
+                user.access_token,
+                json=session_body,
+                prefer="return=representation",
+            )
             session = AIWritingSession(**sessions[0])
         if payload.save_to_memory and payload.content:
-            chunks = [
-                AIWritingChunk(user_id=user.id, writing_session_id=session.id, chunk_index=index, content=content).model_dump(mode="json")
-                for index, content in enumerate(chunk_text(payload.content))
-            ]
+            embeddings = get_embeddings_service()
+            chunks: list[dict] = []
+            for index, content in enumerate(chunk_text(payload.content)):
+                row = AIWritingChunk(
+                    user_id=user.id,
+                    writing_session_id=session.id,
+                    chunk_index=index,
+                    content=content,
+                ).model_dump(mode="json")
+                if embeddings.enabled:
+                    embedded = await embeddings.embed(content)
+                    if embedded:
+                        row["embedding"] = embedded.embedding
+                        row["embedding_model"] = embedded.model
+                        row["embedding_version"] = embedded.version
+                chunks.append(row)
             await user_rest(
-                "POST", "ai_writing_chunks", user.access_token,
+                "POST",
+                "ai_writing_chunks",
+                user.access_token,
                 params={"on_conflict": "writing_session_id,chunk_index"},
                 json=chunks,
                 prefer="resolution=merge-duplicates,return=minimal",
@@ -214,65 +379,147 @@ async def save_writing_session(payload: AIWritingSessionCreate, user: Authentica
 
 
 @router.post("/suggestion", response_model=AISuggestion)
-async def create_suggestion(payload: AISuggestionRequest, user: AuthenticatedUser = Depends(require_ai_user)) -> AISuggestion:
+async def create_suggestion(
+    payload: AISuggestionRequest,
+    user: AuthenticatedUser = Depends(require_ai_user),
+) -> AISuggestion:
     entitlement = await _entitlement(user.id)
     date_key = today_iso()
-    daily_limit = int(entitlement.get("daily_request_limit") or os.environ.get("AI_DAILY_REQUEST_LIMIT", "0"))
+    daily_limit = int(
+        entitlement.get("daily_request_limit")
+        or os.environ.get("AI_DAILY_REQUEST_LIMIT", "0")
+    )
     if daily_limit:
         try:
             used = await service_rest(
-                "GET", "ai_usage",
-                params={"select": "id", "user_id": f"eq.{user.id}", "date": f"eq.{date_key}", "request_type": "eq.suggestion"},
+                "GET",
+                "ai_usage",
+                params={
+                    "select": "id",
+                    "user_id": f"eq.{user.id}",
+                    "date": f"eq.{date_key}",
+                    "request_type": "eq.suggestion",
+                },
             )
         except SupabaseAPIError as error:
             raise_http(error)
         if len(used) >= daily_limit:
-            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Daily AI suggestion limit reached")
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Daily AI suggestion limit reached",
+            )
 
-    context, source_ids = await _build_context(user, payload)
+    profile = await _user_rows("ai_profiles", user, extra={"limit": "1"})
+    answers = await _user_rows(
+        "ai_onboarding_answers",
+        user,
+        extra={"order": "updated_at.desc", "limit": "20"},
+    )
+    memories = await _user_rows(
+        "ai_memories",
+        user,
+        extra={"order": "importance.desc,updated_at.desc", "limit": "30"},
+    )
+    previous = await _user_rows(
+        "ai_suggestions",
+        user,
+        extra={"order": "created_at.desc", "limit": "15"},
+    )
+
+    query_parts = [
+        payload.current_writing or "",
+        payload.current_project or "",
+    ]
+    if not any(query_parts):
+        # Seed retrieval with the user's stated goal so a first-time suggestion
+        # still surfaces relevant private context.
+        if profile:
+            query_parts.append(profile[0].get("writing_goal") or "")
+            query_parts.extend(profile[0].get("primary_topics") or [])
+    query = "\n".join(part for part in query_parts if part).strip()
+    retrieved = await retrieve_user_chunks(user.id, query) if query else []
+
+    context, source_ids = _compose_prompt_context(
+        payload, profile, answers, memories, previous, retrieved
+    )
+    provider = get_suggestion_provider()
+    response: SuggestionProviderResponse
+    used_fallback = False
     try:
-        result: AISuggestionResult = await get_suggestion_provider().generate_suggestion(context)
-    except Exception as error:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="AI provider unavailable") from error
+        response = await provider.generate_suggestion(context)
+    except Exception as error:  # noqa: BLE001 - explicit fallback surface
+        logger.warning(
+            "suggestion_provider_failed provider=%s model=%s error=%s",
+            provider.name,
+            provider.model,
+            error,
+        )
+        # Phase-13 basic fallback: never let the endpoint 5xx for the extension.
+        fallback = MockSuggestionProvider(provider.model)
+        response = await fallback.generate_suggestion(context)
+        used_fallback = True
+
     try:
         rows = await user_rest(
-            "POST", "ai_suggestions", user.access_token,
+            "POST",
+            "ai_suggestions",
+            user.access_token,
             json={
                 "user_id": user.id,
-                "title": result.title,
-                "suggestion": result.suggestion,
-                "reason": result.why,
+                "title": response.result.title,
+                "suggestion": response.result.suggestion,
+                "reason": response.result.why,
                 "context_summary": context[:2000],
-                "related_topics": result.related_topics,
+                "related_topics": response.result.related_topics,
                 "source_ids": source_ids,
                 "status": "shown",
             },
             prefer="return=representation",
         )
-        await service_rest(
-            "POST", "ai_usage",
-            json={"user_id": user.id, "date": date_key, "request_type": "suggestion"},
-            prefer="return=minimal",
-        )
     except SupabaseAPIError as error:
         raise_http(error)
+
+    await _record_usage(
+        user.id,
+        request_type="suggestion_fallback" if used_fallback else "suggestion",
+        model=provider.model,
+        input_tokens=response.usage.input_tokens,
+        output_tokens=response.usage.output_tokens,
+        provider="mock" if used_fallback else provider.name,
+    )
     return AISuggestion(**rows[0])
 
 
 @router.post("/feedback", response_model=AIFeedback, status_code=status.HTTP_201_CREATED)
-async def create_feedback(payload: AISuggestionFeedbackCreate, user: AuthenticatedUser = Depends(require_ai_user)) -> AIFeedback:
-    owned = await _user_rows("ai_suggestions", user, extra={"id": f"eq.{payload.suggestion_id}", "limit": "1"})
+async def create_feedback(
+    payload: AISuggestionFeedbackCreate,
+    user: AuthenticatedUser = Depends(require_ai_user),
+) -> AIFeedback:
+    owned = await _user_rows(
+        "ai_suggestions",
+        user,
+        extra={"id": f"eq.{payload.suggestion_id}", "limit": "1"},
+    )
     if not owned:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Suggestion not found")
     try:
         rows = await user_rest(
-            "POST", "ai_feedback", user.access_token,
-            json={"user_id": user.id, **payload.model_dump()}, prefer="return=representation",
+            "POST",
+            "ai_feedback",
+            user.access_token,
+            json={"user_id": user.id, **payload.model_dump()},
+            prefer="return=representation",
         )
         await user_rest(
-            "PATCH", "ai_suggestions", user.access_token,
-            params={"id": f"eq.{payload.suggestion_id}", "user_id": f"eq.{user.id}"},
-            json={"status": "accepted" if payload.helpful else "rejected"}, prefer="return=minimal",
+            "PATCH",
+            "ai_suggestions",
+            user.access_token,
+            params={
+                "id": f"eq.{payload.suggestion_id}",
+                "user_id": f"eq.{user.id}",
+            },
+            json={"status": "accepted" if payload.helpful else "rejected"},
+            prefer="return=minimal",
         )
     except SupabaseAPIError as error:
         raise_http(error)
@@ -280,6 +527,12 @@ async def create_feedback(payload: AISuggestionFeedbackCreate, user: Authenticat
 
 
 @router.get("/usage", response_model=list[AIUsageEvent])
-async def list_usage(user: AuthenticatedUser = Depends(require_ai_user)) -> list[AIUsageEvent]:
-    rows = await _user_rows("ai_usage", user, extra={"order": "created_at.desc", "limit": "200"})
+async def list_usage(
+    user: AuthenticatedUser = Depends(require_ai_user),
+) -> list[AIUsageEvent]:
+    rows = await _user_rows(
+        "ai_usage",
+        user,
+        extra={"order": "created_at.desc", "limit": "200"},
+    )
     return [AIUsageEvent(**row) for row in rows]

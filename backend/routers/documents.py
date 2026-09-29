@@ -10,6 +10,7 @@ from lib.ai_access import require_ai_user
 from lib.auth import AuthenticatedUser
 from lib.chunking import chunk_text
 from lib.document_processing import DocumentProcessingError, MAX_UPLOAD_BYTES, extract_document
+from lib.embeddings import get_embeddings_service
 from lib.supabase_client import (
     SupabaseAPIError,
     raise_http,
@@ -81,16 +82,22 @@ async def upload_document(
             prefer="return=representation",
         )
         metadata_created = bool(created)
-        chunks = [
-            AIDocumentChunk(
+        embeddings = get_embeddings_service()
+        chunks: list[dict] = []
+        for index, content in enumerate(chunk_text(extracted.text)):
+            row = AIDocumentChunk(
                 user_id=user.id,
                 document_id=document_id,
                 chunk_index=index,
                 content=content,
                 metadata={"filename": metadata.filename, "file_type": metadata.file_type},
             ).model_dump(mode="json")
-            for index, content in enumerate(chunk_text(extracted.text))
-        ]
+            embedded = await embeddings.embed(content) if embeddings.enabled else None
+            if embedded:
+                row["embedding"] = embedded.embedding
+                row["embedding_model"] = embedded.model
+                row["embedding_version"] = embedded.version
+            chunks.append(row)
         await user_rest(
             "POST", "ai_document_chunks", user.access_token,
             params={"on_conflict": "document_id,chunk_index"},
