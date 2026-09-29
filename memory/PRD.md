@@ -68,5 +68,10 @@
   - Background service worker exposes a `SEND_AI_FEEDBACK` message that routes through the existing cookie-authenticated `WCApi.post('/ai/feedback', ...)`.
 - End-to-end smoke test confirmed: thumbs-up creates an `ai_feedback` row with `helpful=true`; thumbs-down + reason creates an `ai_feedback` row with the correct reason and flips the parent `ai_suggestions.status` to `rejected`.
 
+## Feedback-aware retrieval (implemented 2026-09-29)
+- `lib/retrieval.py` now builds a per-source-id score map from the user's last 100 accepted/rejected suggestions (`ACCEPT_INC=+1.0`, `REJECT_INC=-1.5`, clamped to ±3.0), then reranks retrieval candidates by `adjusted = similarity + FEEDBACK_WEIGHT * tanh(score / CLAMP)`. `FEEDBACK_WEIGHT=0.12`, `MIN_ADJUSTED_SIMILARITY=0.35` (drops candidates whose adjusted score falls below the retrieval floor). Parents share a softened bias with their siblings.
+- Retrieval overfetches (`match_count * 2`, capped at 20) so the reranker has room to drop losers without returning fewer chunks than requested.
+- End-to-end verified: on an isolated Pro test user with 3 seeded memories, a **thumbs-down** dropped the two weaker matches entirely and left only the top one (still relevant enough to survive); a **thumbs-up** on the same suggestion (state reset) boosted the top match's adjusted similarity from ~0.66 to 0.71.
+
 ## Env keys (all in backend/.env)
 `CORS_ORIGINS`, `AI_AUTH_MODE=supabase`, `AI_PROVIDER=openai`, `AI_MODEL=gpt-5.4-mini`, `OPENAI_CHAT_MODEL`, `OPENAI_EMBED_MODEL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, `SUPABASE_DB_URL`, `SUPABASE_JWT_AUDIENCE`, `OPENAI_API_KEY`, `AI_REQUIRE_SUBSCRIPTION`, optional `AI_DAILY_REQUEST_LIMIT`.
