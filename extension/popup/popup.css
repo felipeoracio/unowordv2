@@ -281,6 +281,34 @@ html, body {
 .wc__prompt-ai-status {
   margin: 0; font-size: 11px; color: var(--text-muted); font-style: italic;
 }
+.wc__prompt-ai-feedback {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 4px; padding-top: 8px;
+  border-top: 1px dashed color-mix(in srgb, var(--primary) 15%, var(--border));
+}
+.wc__prompt-ai-feedback-label {
+  font-size: 11px; color: var(--text-muted); margin-right: auto;
+}
+.wc__prompt-ai-thumb {
+  padding: 4px; border-radius: 8px; color: var(--text-muted);
+  transition: color 120ms ease, background-color 120ms ease;
+}
+.wc__prompt-ai-thumb:hover { color: var(--primary); background: color-mix(in srgb, var(--primary) 10%, transparent); }
+.wc__prompt-ai-thumb[aria-pressed="true"] {
+  color: var(--primary); background: color-mix(in srgb, var(--primary) 14%, transparent);
+}
+.wc__prompt-ai-reasons {
+  display: flex; flex-direction: column; gap: 6px; margin-top: 2px;
+}
+.wc__prompt-ai-reasons-label {
+  margin: 0; font-size: 11px; color: var(--text-muted);
+}
+.wc__prompt-ai-reasons-chips {
+  display: flex; flex-wrap: wrap; gap: 4px;
+}
+.wc__prompt-ai-thanks {
+  margin: 0; font-size: 11px; color: var(--primary); font-weight: 500;
+}
 
 /* ================ UPGRADE CTA ================ */
 .wc__upgrade-cta {
@@ -310,6 +338,10 @@ html, body {
 .wc__plan-title { margin: 0; font-size: 15px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
 .wc__plan-price { margin: 0; font-size: 14px; font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
 .wc__plan-per   { font-size: 11.5px; color: var(--text-subtle); font-weight: 500; }
+.wc__plan-trial {
+  margin: 4px 0 0; font-size: 11px; font-weight: 500;
+  color: var(--primary); letter-spacing: 0.01em;
+}
 .wc__plan-list  { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--text-muted); }
 .wc__plan-list li::before { content: "•"; color: var(--primary); margin-right: 6px; }
 

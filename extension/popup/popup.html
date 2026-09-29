@@ -73,6 +73,27 @@
             <p id="prompt-ai-reason" data-testid="prompt-ai-reason"></p>
           </details>
           <div class="wc__prompt-ai-topics" id="prompt-ai-topics" data-testid="prompt-ai-topics"></div>
+          <div class="wc__prompt-ai-feedback" id="prompt-ai-feedback" data-testid="prompt-ai-feedback">
+            <span class="wc__prompt-ai-feedback-label" data-i18n="prompt.ai.helpful" data-testid="prompt-ai-feedback-label">Was this helpful?</span>
+            <button class="wc__icon-btn wc__prompt-ai-thumb" id="prompt-ai-up" data-testid="prompt-ai-up" data-i18n-title="prompt.ai.up" data-i18n-aria="prompt.ai.up" aria-label="Yes, helpful" type="button">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 22V11"/><path d="M7 11l3-7a3 3 0 0 1 6 0v4h4a2 2 0 0 1 2 2v0a2 2 0 0 1-2 2h-1l-1.4 6.3A2 2 0 0 1 15.6 20H9a2 2 0 0 1-2-2z"/></svg>
+            </button>
+            <button class="wc__icon-btn wc__prompt-ai-thumb" id="prompt-ai-down" data-testid="prompt-ai-down" data-i18n-title="prompt.ai.down" data-i18n-aria="prompt.ai.down" aria-label="Not helpful" type="button">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2v11"/><path d="M17 13l-3 7a3 3 0 0 1-6 0v-4H4a2 2 0 0 1-2-2v0a2 2 0 0 1 2-2h1l1.4-6.3A2 2 0 0 1 8.4 4H15a2 2 0 0 1 2 2z"/></svg>
+            </button>
+          </div>
+          <div class="wc__prompt-ai-reasons" id="prompt-ai-reasons" data-testid="prompt-ai-reasons" hidden>
+            <p class="wc__prompt-ai-reasons-label" data-i18n="prompt.ai.reason.title" data-testid="prompt-ai-reasons-label">What went wrong?</p>
+            <div class="wc__prompt-ai-reasons-chips">
+              <button class="wc__chip" type="button" data-reason="already_written" data-testid="prompt-ai-reason-already_written" data-i18n="prompt.ai.reason.already_written">Already written</button>
+              <button class="wc__chip" type="button" data-reason="not_interested" data-testid="prompt-ai-reason-not_interested" data-i18n="prompt.ai.reason.not_interested">Not interested</button>
+              <button class="wc__chip" type="button" data-reason="wrong_direction" data-testid="prompt-ai-reason-wrong_direction" data-i18n="prompt.ai.reason.wrong_direction">Wrong direction</button>
+              <button class="wc__chip" type="button" data-reason="too_personal" data-testid="prompt-ai-reason-too_personal" data-i18n="prompt.ai.reason.too_personal">Too personal</button>
+              <button class="wc__chip" type="button" data-reason="too_vague" data-testid="prompt-ai-reason-too_vague" data-i18n="prompt.ai.reason.too_vague">Too vague</button>
+              <button class="wc__chip" type="button" data-reason="other" data-testid="prompt-ai-reason-other" data-i18n="prompt.ai.reason.other">Other</button>
+            </div>
+          </div>
+          <p class="wc__prompt-ai-thanks" id="prompt-ai-thanks" data-testid="prompt-ai-thanks" hidden></p>
         </div>
         <p class="wc__prompt-goal" id="prompt-goal" data-testid="prompt-goal">Your goal: 250 words</p>
         <p class="wc__prompt-ai-status" id="prompt-ai-status" data-testid="prompt-ai-status" hidden></p>
@@ -174,10 +195,12 @@
           <div class="wc__plan wc__plan--pro">
             <div class="wc__plan-head">
               <p class="wc__plan-title"><span data-i18n="upgrade.pro.title">Pro</span> <span class="wc__pro-badge" data-i18n="badge.pro">PRO</span></p>
-              <p class="wc__plan-price"><span data-i18n="upgrade.pro.price">$4.99</span> <span class="wc__plan-per" data-i18n="upgrade.pro.per">/ month</span></p>
+              <p class="wc__plan-price"><span data-i18n="upgrade.pro.price">$20</span> <span class="wc__plan-per" data-i18n="upgrade.pro.per">/ month</span></p>
+              <p class="wc__plan-trial" data-i18n="upgrade.pro.trial" data-testid="upgrade-pro-trial">Includes a 7-day free trial</p>
             </div>
             <ul class="wc__plan-list">
               <li data-i18n="upgrade.pro.f1">Everything in Free</li>
+              <li data-i18n="upgrade.pro.f7" data-testid="upgrade-pro-f7">AI Writing Coach — personalized suggestions, private memory, and document context</li>
               <li data-i18n="upgrade.pro.f2">Personalized daily prompts</li>
               <li data-i18n="upgrade.pro.f3">Writing themes</li>
               <li data-i18n="upgrade.pro.f4">Session writing goals</li>
@@ -187,7 +210,7 @@
           </div>
         </div>
 
-        <button class="wc__btn wc__btn--primary" id="try-pro" data-testid="try-pro" data-i18n="upgrade.tryPro">Try Pro</button>
+        <button class="wc__btn wc__btn--primary" id="try-pro" data-testid="try-pro" data-i18n="upgrade.tryPro">Start free 7-day trial</button>
         <p class="wc__footnote" data-i18n="upgrade.demoNote">Demo mode — no payment collected. Toggle off anytime.</p>
       </section>
 

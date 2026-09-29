@@ -859,6 +859,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           sendResponse(result);
           return;
         }
+        case 'SEND_AI_FEEDBACK': {
+          try {
+            const body = { suggestion_id: msg.suggestionId, helpful: !!msg.helpful };
+            if (msg.reason) body.reason = msg.reason;
+            if (msg.note) body.note = String(msg.note).slice(0, 2000);
+            const feedback = await self.WCApi.post('/ai/feedback', body);
+            sendResponse({ ok: true, feedback });
+          } catch (error) {
+            sendResponse({ ok: false, error: apiErrorCode(error) });
+          }
+          return;
+        }
         case 'ANOTHER_PROMPT': {
           const prompt = await requestAnotherPrompt();
           sendResponse({ ok: true, prompt });

@@ -81,6 +81,11 @@ const els = {
   promptAiWhy:  $('prompt-ai-why'),
   promptAiTopics:$('prompt-ai-topics'),
   promptAiStatus:$('prompt-ai-status'),
+  promptAiFeedback:$('prompt-ai-feedback'),
+  promptAiUp:   $('prompt-ai-up'),
+  promptAiDown: $('prompt-ai-down'),
+  promptAiReasons:$('prompt-ai-reasons'),
+  promptAiThanks:$('prompt-ai-thanks'),
 
   // upgrade CTA & screen
   openUpgrade:  $('open-upgrade'),
@@ -496,6 +501,20 @@ async function getNextPrompt({ draft = '', project = '' } = {}) {
   return { mode: 'static', prompt: staticResp.ok ? staticResp.prompt : null, statusKey };
 }
 
+function resetFeedbackUI() {
+  els.promptAiUp.setAttribute('aria-pressed', 'false');
+  els.promptAiDown.setAttribute('aria-pressed', 'false');
+  els.promptAiUp.disabled = false;
+  els.promptAiDown.disabled = false;
+  els.promptAiReasons.hidden = true;
+  els.promptAiThanks.hidden = true;
+  els.promptAiThanks.textContent = '';
+  els.promptAiReasons.querySelectorAll('.wc__chip').forEach((chip) => {
+    chip.disabled = false;
+    chip.setAttribute('aria-pressed', 'false');
+  });
+}
+
 function renderAISuggestion(sug) {
   aiSuggestion = sug;
   aiMode = true;
@@ -520,6 +539,52 @@ function renderAISuggestion(sug) {
   els.promptGoal.textContent = t('prompt.yourGoal', { n: fmtNumber(settings?.wordGoal || 250) });
   els.promptEmpty.hidden = true;
   els.promptAiStatus.hidden = true;
+  resetFeedbackUI();
+}
+
+async function submitAiFeedback({ helpful, reason = null }) {
+  if (!aiSuggestion || !aiSuggestion.id) return;
+  els.promptAiUp.disabled = true;
+  els.promptAiDown.disabled = true;
+  els.promptAiReasons.querySelectorAll('.wc__chip').forEach((c) => { c.disabled = true; });
+  const result = await sendMessage({
+    type: 'SEND_AI_FEEDBACK',
+    suggestionId: aiSuggestion.id,
+    helpful,
+    reason,
+  });
+  if (!result.ok) {
+    els.promptAiThanks.hidden = false;
+    els.promptAiThanks.textContent = t('prompt.ai.thanks.error');
+    els.promptAiUp.disabled = false;
+    els.promptAiDown.disabled = false;
+    els.promptAiReasons.querySelectorAll('.wc__chip').forEach((c) => { c.disabled = false; });
+    return;
+  }
+  els.promptAiReasons.hidden = true;
+  els.promptAiThanks.hidden = false;
+  els.promptAiThanks.textContent = t(helpful ? 'prompt.ai.thanks.up' : 'prompt.ai.thanks.down');
+}
+
+function onAiThumbUp() {
+  if (!aiSuggestion) return;
+  els.promptAiUp.setAttribute('aria-pressed', 'true');
+  els.promptAiDown.setAttribute('aria-pressed', 'false');
+  els.promptAiReasons.hidden = true;
+  submitAiFeedback({ helpful: true });
+}
+
+function onAiThumbDown() {
+  if (!aiSuggestion) return;
+  els.promptAiDown.setAttribute('aria-pressed', 'true');
+  els.promptAiUp.setAttribute('aria-pressed', 'false');
+  els.promptAiReasons.hidden = false;
+  els.promptAiThanks.hidden = true;
+}
+
+function onAiReasonPick(reason, button) {
+  els.promptAiReasons.querySelectorAll('.wc__chip').forEach((c) => c.setAttribute('aria-pressed', c === button ? 'true' : 'false'));
+  submitAiFeedback({ helpful: false, reason });
 }
 
 function renderStaticPrompt(prompt, statusKey = null) {
@@ -1532,6 +1597,13 @@ function wire() {
     }
     const r = await sendMessage({ type: 'ANOTHER_PROMPT' });
     if (r.ok) { promptState = r.prompt; if (promptState?.text) els.promptText.textContent = promptState.text; }
+  });
+
+  // AI suggestion feedback → /api/ai/feedback (thumbs + optional reason).
+  els.promptAiUp.addEventListener('click', onAiThumbUp);
+  els.promptAiDown.addEventListener('click', onAiThumbDown);
+  els.promptAiReasons.querySelectorAll('.wc__chip').forEach((chip) => {
+    chip.addEventListener('click', () => onAiReasonPick(chip.dataset.reason, chip));
   });
 
   // Live state updates

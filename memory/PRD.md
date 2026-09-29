@@ -57,5 +57,16 @@
 - Extension `popup.js` now has a single `getNextPrompt({draft, project})` seam. `renderPrompt()` and the "Another" handler both go through it. The status line is only shown for genuinely noisy failures (`offline`, `rate_limited`, `request_failed`); expected states (unauthenticated, non-entitled) render the plain static path silently.
 - Smoke test: seeded a brand-new cold-start user; empty-payload `/api/ai/suggestion` returned the basic prompt with `suggestion_fallback_cold_start` usage row and zero OpenAI cost. Populated user still returns real personalized RAG output with token counts.
 
+## Pricing + Feedback Loop (implemented 2026-09-29)
+- Extension bumped to `0.9.0`.
+- Pro plan is now `$20 / month with a 7-day free trial`. Free plan no longer lists AI features — AI is Pro-only (already enforced server-side via `require_ai_user` → `ai_entitlements.plan in {pro, premium}` with `status in {active, trialing}`). Updated `upgrade.pro.price`, `upgrade.pro.trial`, and added `upgrade.pro.f7` (AI Writing Coach feature) in both English and Spanish. "Try Pro" button relabeled to "Start free 7-day trial".
+- Feedback UI wired on the AI card:
+  - Thumbs-up posts `{ helpful: true }` to `/api/ai/feedback` and flips `ai_suggestions.status` to `accepted`.
+  - Thumbs-down reveals a chip picker (already_written, not_interested, wrong_direction, too_personal, too_vague, other); selecting a chip posts `{ helpful: false, reason }` and flips `ai_suggestions.status` to `rejected`.
+  - Success shows a subtle thanks line; error is retryable.
+  - All new elements have `data-testid` attributes (thumbs, reason chips, thanks line).
+  - Background service worker exposes a `SEND_AI_FEEDBACK` message that routes through the existing cookie-authenticated `WCApi.post('/ai/feedback', ...)`.
+- End-to-end smoke test confirmed: thumbs-up creates an `ai_feedback` row with `helpful=true`; thumbs-down + reason creates an `ai_feedback` row with the correct reason and flips the parent `ai_suggestions.status` to `rejected`.
+
 ## Env keys (all in backend/.env)
 `CORS_ORIGINS`, `AI_AUTH_MODE=supabase`, `AI_PROVIDER=openai`, `AI_MODEL=gpt-5.4-mini`, `OPENAI_CHAT_MODEL`, `OPENAI_EMBED_MODEL`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, `SUPABASE_DB_URL`, `SUPABASE_JWT_AUDIENCE`, `OPENAI_API_KEY`, `AI_REQUIRE_SUBSCRIPTION`, optional `AI_DAILY_REQUEST_LIMIT`.
